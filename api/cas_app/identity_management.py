@@ -65,6 +65,6 @@ def update_user(actor, serializer):
     # Old tokens can never undo role removal during the synchronization window.
     user.keycloak_roles_valid_after = math.ceil(timezone.now().timestamp())
     user.save(update_fields=["keycloak_roles_valid_after"])
-    effective = KeycloakAdmin().replace_roles(user.keycloak_sub, [remote_name(g) for g in values["groups"]])
+    effective = KeycloakAdmin().replace_roles(user.keycloak_sub, [remote_name(g) for g in values["groups"]], remove_inherited_citizen=True)
     values["groups"] = local_groups(effective)
     serializer.save(status_changed_by=actor)

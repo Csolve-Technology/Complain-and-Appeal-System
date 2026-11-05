@@ -81,7 +81,32 @@ class KeycloakAdmin:
     def delete(self, subject): self.request("DELETE", self.user_path(subject))
     def enable(self, subject): self.request("PUT", self.user_path(subject), {"enabled":True})
 
-    def replace_roles(self, subject, names):
+    def applicant_memberships(self, subject):
+        """Only unlink the dedicated root applicant group with CAS-only grants."""
+        memberships = []
+        first = 0
+        while True:
+            page = self.request("GET", self.user_path(subject) + f"/groups?first={first}&max=100")
+            memberships.extend(page)
+            if len(page) < 100: break
+            first += len(page)
+        removable = []
+        for group in memberships:
+            if group.get("name") != "CAS Applicants" or group.get("path") != "/CAS Applicants": continue
+            group_id = quote(group["id"], safe="")
+            mappings = self.request("GET", self.api + f"/groups/{group_id}/role-mappings")
+            clients = mappings.get("clientMappings", {})
+            safe = not mappings.get("realmMappings") and bool(clients)
+            for client in clients.values():
+                roles = client.get("mappings", [])
+                safe = safe and client.get("id") == self.client_id and bool(roles)
+                safe = safe and all(role.get("name") in {"CITIZEN", "Citizen"} and not role.get("composite") for role in roles)
+            if not safe:
+                raise ValidationError({"groups":"CAS Applicants contains additional grants. Remove this membership in Keycloak to avoid changing other access."})
+            removable.append(group_id)
+        return removable
+
+    def replace_roles(self, subject, names, *, remove_inherited_citizen=False):
         available = {r["name"]:r for r in self.roles()}
         if not set(names).issubset(available): raise ValidationError({"groups":"A selected role is missing in cas-api. Synchronize roles first."})
         if any(available[n].get("composite") for n in names):
@@ -91,6 +116,10 @@ class KeycloakAdmin:
         effective = self.request("GET", path + "/composite")
         inherited = {r["name"] for r in effective} - {r["name"] for r in current}
         if inherited - set(names) - {"CITIZEN", "Citizen"}: raise ValidationError({"groups":"Remove inherited CAS roles through the user's Keycloak group before changing this assignment."})
+        remove_applicant = remove_inherited_citizen and not set(names).intersection({"CITIZEN", "Citizen"})
+        memberships = self.applicant_memberships(subject) if remove_applicant and any(r["name"] in {"CITIZEN", "Citizen"} for r in effective) else []
+        for group_id in memberships:
+            self.request("DELETE", self.user_path(subject) + f"/groups/{group_id}")
         remove = [r for r in current if r["name"] not in names]
         add = [available[n] for n in names if n not in {r["name"] for r in current}]
         if remove: self.request("DELETE", path, remove)
@@ -99,7 +128,7 @@ class KeycloakAdmin:
         # The effective endpoint deduplicates direct and inherited grants. A
         # default Citizen membership may therefore become visible only after
         # removing the same directly assigned role.
-        unexpected = effective_names - set(names) - {"CITIZEN", "Citizen"}
+        unexpected = effective_names - set(names) - (set() if remove_inherited_citizen else {"CITIZEN", "Citizen"})
         if unexpected:
             raise ValidationError({"groups":"The user still inherits another CAS role. Remove that assignment through the user's Keycloak group before changing this role."})
         if set(names) - effective_names:

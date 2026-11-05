@@ -1,5 +1,6 @@
 "use client";
 
+import { RoleMultiSelect } from "@/components/ui/role-multi-select";
 import { readFormErrors } from "@/lib/form-errors";
 import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
@@ -56,7 +57,7 @@ type EditForm = {
   phone_number: string;
   national_id: string;
   status: string;
-  group: string;
+  groups: string[];
 };
 
 type NewUserForm = {
@@ -65,7 +66,7 @@ type NewUserForm = {
   email: string;         // used as username
   phone_number: string;
   national_id: string;
-  group: string;         // single-select for create
+  groups: string[];         // single-select for create
 };
 
 const statusBadge: Record<string, string> = {
@@ -112,7 +113,7 @@ export default function UsersPage() {
     email: "",
     phone_number: "",
     national_id: "",
-    group: "", // set default later based on current user role
+    groups: [], // set default later based on current user role
   });
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
   const [editForm, setEditForm] = useState<EditForm>({
@@ -122,7 +123,7 @@ export default function UsersPage() {
     phone_number: "",
     national_id: "",
     status: "active",
-    group: "",
+    groups: [],
   });
   const [editError, setEditError] = useState("");
   const [updating, setUpdating] = useState(false);
@@ -239,13 +240,8 @@ export default function UsersPage() {
       const rows = (Array.isArray(data) ? data : []).map(mapUser);
       setUsers(rows);
 
-      // default creation role:
-      setForm((s) => ({
-        ...s,
-        group: canAssignAnyRole
-          ? (namesFrom(rows).includes("Citizen") ? "Citizen" : (roles[0] || "Citizen"))
-          : "Citizen",
-      }));
+      // Preserve selected roles when refreshing the directory.
+      setForm(previous => ({ ...previous, groups: previous.groups.length ? previous.groups : (roles.includes("Citizen") ? ["Citizen"] : []) }));
     } catch (err: any) {
       setPageError(err?.message || "Failed to load users/roles");
     } finally {
@@ -375,7 +371,7 @@ export default function UsersPage() {
       setCreating(true);
 
       // Focal Person can only create Citizen users
-      const assignedRole = canAssignAnyRole ? (form.group || "Citizen") : "Citizen";
+      const assignedRoles = canAssignAnyRole ? form.groups : ["Citizen"];
       
       const payload: Record<string, any> = {
         username: form.email || `${form.first_name.toLowerCase()}_${Date.now()}`, // email as username, or generate one
@@ -383,7 +379,7 @@ export default function UsersPage() {
         last_name: form.last_name.trim(),
         phone_number: form.phone_number.trim(),
         status: "active",
-        groups: [assignedRole],
+        groups: assignedRoles,
         ...(mode === "keycloak" ? { password: temporaryPassword } : {}),
       };
 
@@ -432,7 +428,7 @@ export default function UsersPage() {
         email: "",
         phone_number: "",
         national_id: "",
-        group: canAssignAnyRole ? (roles[0] || "Citizen") : "Citizen",
+        groups: roles.includes("Citizen") ? ["Citizen"] : [],
       });
       setFieldErrors({});
       setOpenDialog(false);
@@ -476,7 +472,7 @@ export default function UsersPage() {
       };
 
       if (can("cas_app.change_user")) {
-        payload.groups = editForm.group ? [editForm.group] : [];
+        payload.groups = editForm.groups;
       } else if (isFocalPerson) {
         // Focal Person can only assign Citizen role
         const citizenGroup = roles.find((r) => r === "Citizen");
@@ -494,8 +490,8 @@ export default function UsersPage() {
       });
 
       if (!res.ok) {
-        const msg = await res.text();
-        throw new Error(msg || `Update failed: ${res.status}`);
+        const failure = await readFormErrors(res);
+        throw new Error([failure.message, ...Object.values(failure.fields)].join(" "));
       }
 
       const updated: ApiUser = await res.json();
@@ -581,7 +577,7 @@ export default function UsersPage() {
               // default role when opening the modal
               setForm((s) => ({
                 ...s,
-                group: canAssignAnyRole ? (s.group || roles[0] || "Citizen") : "Citizen",
+                groups: s.groups.length ? s.groups : (roles.includes("Citizen") ? ["Citizen"] : []),
               }));
             }}
           >
@@ -677,7 +673,7 @@ export default function UsersPage() {
                             phone_number: u.phone === "—" ? "" : u.phone,
                             national_id: u.nationalId === "—" ? "" : u.nationalId,
                             status: u.status || "active",
-                            group: u.roles.find((role) => role !== "—") || "",
+                            groups: u.roles.filter(role => role !== "?"),
                           });
                           setEditError("");
                           setEditModalOpen(true);
@@ -875,26 +871,11 @@ export default function UsersPage() {
               )}
             </div>
 
-            {/* Role: Citizen for non-directors; dropdown for Director */}
-            {canAssignAnyRole ? (
-              <select
-                className="w-full rounded border border-gray-300 p-2 dark:border-dark-3 dark:bg-dark-2"
-                value={form.group}
-                onChange={(e) => setForm((s) => ({ ...s, group: e.target.value }))}
-              >
-                {roles.length === 0 ? (
-                  <option value="">No roles</option>
-                ) : (
-                  roles.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))
-                )}
-              </select>
-            ) : (
-              <Input value="Citizen" readOnly className="opacity-80" />
-            )}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Roles</label>
+              {canAssignAnyRole ? <RoleMultiSelect options={roles} value={form.groups} onChange={groups => setForm(previous => ({...previous, groups}))} disabled={creating} /> : <Input value="Citizen" readOnly />}
+              {fieldErrors.group && <p role="alert" className="text-sm text-red-600">{fieldErrors.group}</p>}
+            </div>
           </div>
 
           <Button
@@ -1051,35 +1032,11 @@ export default function UsersPage() {
                 </select>
               </div>
             </div>
-            {canAssignAnyRole ? (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Role
-                </label>
-                <select
-                  className="w-full rounded border border-gray-300 p-2 dark:border-dark-3 dark:bg-dark-2"
-                  value={editForm.group}
-                  onChange={(e) =>
-                    setEditForm((s) => ({ ...s, group: e.target.value }))
-                  }
-                  disabled={updating}
-                >
-                  <option value="">No role</option>
-                  {roles.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Role
-                </label>
-                <Input value={selectedUser.roles.join(", ")} readOnly />
-              </div>
-            )}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Roles</label>
+              {can("cas_app.change_user") ? <RoleMultiSelect options={roles} value={editForm.groups} onChange={groups => setEditForm(previous => ({...previous, groups}))} disabled={updating} /> : <Input value={selectedUser.roles.join(", ")} readOnly />}
+              {mode === "keycloak" && <p className="text-sm text-gray-500">Select or clear roles. Clearing Citizen also removes membership in the dedicated CAS Applicants group. Other inherited roles must be removed in Keycloak.</p>}
+            </div>
             {editError && <div className="text-sm text-red-500">{editError}</div>}
             <div className="flex justify-end gap-3">
               <Button

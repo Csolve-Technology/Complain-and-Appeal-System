@@ -101,7 +101,7 @@ class PermissionTests(TestCase):
             cls.return_value.replace_roles.return_value=["CITIZEN"]
             response=self.client.patch(f"/api/users/{target.pk}/", {"groups":["Citizen"]},format="json")
             self.assertEqual(response.status_code,200,response.data)
-            cls.return_value.replace_roles.assert_called_once_with("target-sub",["CITIZEN"])
+            cls.return_value.replace_roles.assert_called_once_with("target-sub",["CITIZEN"],remove_inherited_citizen=True)
         target.refresh_from_db();self.assertGreater(target.keycloak_roles_valid_after,0)
         self.assertEqual(list(target.groups.values_list("name",flat=True)),["Citizen"])
     def test_failed_role_update_still_revokes_old_tokens(self):
@@ -203,3 +203,35 @@ class ManagementRoleTests(TestCase):
         manager=self.manager()
         manager.request=Mock(side_effect=[[],[],None,[]])
         with self.assertRaises(ManagementUnavailable): manager.replace_roles("subject",["ADMIN"])
+
+    def test_explicit_removal_leaves_dedicated_applicant_group(self):
+        manager=self.manager()
+        manager.request=Mock(side_effect=[
+            [{"name":"ADMIN","id":"admin"}],
+            [{"name":"ADMIN","id":"admin"},{"name":"CITIZEN","id":"citizen"}],
+            [{"id":"applicants","name":"CAS Applicants","path":"/CAS Applicants"}],
+            {"clientMappings":{"cas-api":{"id":"cas-id","mappings":[{"name":"CITIZEN","composite":False}]}}},
+            None,
+            [{"name":"ADMIN","id":"admin"}],
+        ])
+        self.assertEqual(manager.replace_roles("subject",["ADMIN"],remove_inherited_citizen=True),["ADMIN"])
+        self.assertIn(("DELETE","/admin/realms/chirocity/users/subject/groups/applicants"),[call.args for call in manager.request.call_args_list])
+
+    def test_applicant_group_with_other_app_grants_is_never_removed(self):
+        manager=self.manager()
+        manager.request=Mock(side_effect=[
+            [{"id":"applicants","name":"CAS Applicants","path":"/CAS Applicants"}],
+            {"clientMappings":{"hrms-api":{"id":"hrms-id","mappings":[{"name":"ADMIN"}]}}},
+        ])
+        with self.assertRaises(ValidationError): manager.applicant_memberships("subject")
+        self.assertTrue(all(call.args[0]=="GET" for call in manager.request.call_args_list))
+
+    def test_role_from_another_group_cannot_report_successfully_removed(self):
+        manager=self.manager()
+        manager.request=Mock(side_effect=[[],[{"name":"CITIZEN"}],[],None,[{"name":"ADMIN"},{"name":"CITIZEN"}]])
+        with self.assertRaises(ValidationError): manager.replace_roles("subject",["ADMIN"],remove_inherited_citizen=True)
+
+    def test_direct_citizen_can_be_removed_when_not_in_default_group(self):
+        manager=self.manager()
+        manager.request=Mock(side_effect=[[{"name":"CITIZEN"}],[{"name":"CITIZEN"}],[],None,[]])
+        self.assertEqual(manager.replace_roles("subject",[],remove_inherited_citizen=True),[])
