@@ -10,3 +10,20 @@ venv/
 .venv/
 api/media/
 api/staticfiles/
+
+# Private runtime data and local credentials (including previously tracked files).
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-journal
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+backups/
+!.env.sample
