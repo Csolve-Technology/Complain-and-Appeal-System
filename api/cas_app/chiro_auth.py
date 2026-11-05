@@ -55,9 +55,13 @@ def resolve_user(payload):
     roles = client.get("roles", []) if isinstance(client, dict) else []
     if not isinstance(roles, list) or not all(isinstance(role, str) for role in roles):
         raise PermissionDenied("Your account has not been granted access to CAS.")
-    group_name = next((name for aliases, name in ROLE_GROUPS if any(role in roles for role in aliases)), None)
-    if not group_name:
+    known = [name for aliases, name in ROLE_GROUPS if any(role in roles for role in aliases)]
+    aliases = {alias for names, _ in ROLE_GROUPS for alias in names}
+    custom = list(Group.objects.filter(name__in=[r for r in roles if r not in aliases]).values_list("name", flat=True))
+    group_names = known + sorted(custom)
+    if not group_names:
         raise PermissionDenied("Your account has not been granted access to CAS.")
+    group_name = group_names[0]
     email = payload.get("email")
     if not isinstance(email, str) or not email or len(email) > 254:
         raise PermissionDenied("Your Chiro Auth account must include an email address.")
@@ -67,11 +71,13 @@ def resolve_user(payload):
     User = get_user_model()
     try:
         with transaction.atomic():
-            group = Group.objects.filter(name=group_name).first()
-            if not group:
+            groups = list(Group.objects.filter(name__in=group_names))
+            if len(groups) != len(group_names):
                 raise PermissionDenied("CAS role permissions are not configured. Contact your administrator.")
             user = User.objects.select_for_update().filter(keycloak_sub=subject).first()
             if user:
+                if payload.get("iat", 0) < user.keycloak_roles_valid_after:
+                    raise AuthenticationFailed("Your CAS roles changed. Sign out and sign in again.")
                 if not user.is_active or user.is_deleted or user.status != "active":
                     raise PermissionDenied("This CAS account is disabled.")
                 if user.keycloak_issuer != issuer:
@@ -92,7 +98,7 @@ def resolve_user(payload):
                     setattr(user, field, claim[:150]); changes.append(field)
             if user.pk is None: user.save()
             elif changes: user.save(update_fields=changes)
-            if list(user.groups.values_list("pk", flat=True)) != [group.pk]: user.groups.set([group])
+            if set(user.groups.values_list("pk", flat=True)) != {g.pk for g in groups}: user.groups.set(groups)
             if user.user_permissions.exists(): user.user_permissions.clear()
             return user
     except IntegrityError as error:

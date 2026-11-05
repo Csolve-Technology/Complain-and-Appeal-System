@@ -19,6 +19,8 @@ jobs:
         env:
           DEPLOY_DOMAINS: '0'
         run: bash deploy/deploy.sh
+      - name: Verify authorization and identity provisioning
+        run: docker compose exec -T cas-api python manage.py test cas_app --noinput
       - name: Package verified runtime images
         run: docker save cas-api:local cas-web:local | gzip > cas-images.tar.gz
       - uses: actions/upload-artifact@v4

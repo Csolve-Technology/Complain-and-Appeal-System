@@ -1,5 +1,7 @@
 "use client";
 
+import { readFormErrors } from "@/lib/form-errors";
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useEffect, useMemo, useState } from "react";
@@ -76,6 +78,8 @@ const PAGE_SIZE = 10;
 
 /* ========= Page ========= */
 export default function UsersPage() {
+  const { can, mode } = useChiroAuth();
+  const [temporaryPassword, setTemporaryPassword] = useState("");
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
   // table + filters
@@ -173,8 +177,8 @@ export default function UsersPage() {
   
   // Dynamic permission check: Director and Mayor Office can assign any role
   // Focal Person can only assign Citizen role
-  const canAssignAnyRole = isDirector || isMayorOffice;
-  const canCreateUser = canAssignAnyRole || isFocalPerson;
+  const canAssignAnyRole = can("cas_app.add_user") || can("cas_app.change_user");
+  const canCreateUser = can("cas_app.add_user");
 
   // ---- Load roles and users ----
   const mapUser = (u: ApiUser): UserRow => {
@@ -211,11 +215,11 @@ export default function UsersPage() {
       setPageError("");
 
       // roles/groups
-      const gr = await authFetch(`${API_URL}/groups/`, {
+      const gr = canAssignAnyRole ? await authFetch(`${API_URL}/users/assignable-roles/`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         cache: "no-store",
-      });
-      if (gr.ok) {
+      }) : null;
+      if (gr?.ok) {
         const gjson = await gr.json();
         const names: string[] = (Array.isArray(gjson) ? gjson : [])
           .map((g: any) => g?.name)
@@ -335,6 +339,11 @@ export default function UsersPage() {
     // Client-side validation
     const errors: Record<string, string> = {};
     
+    if (mode === "keycloak") {
+      if (!form.email.trim()) errors.email = "Email is required for Chiro Auth accounts.";
+      if (!temporaryPassword) errors.password = "Enter an initial temporary password.";
+    }
+
     if (!form.first_name?.trim()) {
       errors.first_name = "First name is required";
     }
@@ -375,6 +384,7 @@ export default function UsersPage() {
         phone_number: form.phone_number.trim(),
         status: "active",
         groups: [assignedRole],
+        ...(mode === "keycloak" ? { password: temporaryPassword } : {}),
       };
 
       // Add optional fields only if they have values
@@ -395,105 +405,9 @@ export default function UsersPage() {
       });
 
       if (!res.ok) {
-        let errorData: any = {};
-        const responseText = await res.text();
-        
-        try {
-          errorData = JSON.parse(responseText);
-        } catch {
-          errorData = { detail: responseText || res.statusText };
-        }
-
-        // Helper function to extract error message
-        const getErrorMessage = (fieldError: any): string => {
-          if (Array.isArray(fieldError)) {
-            return fieldError[0] || "Invalid value";
-          }
-          if (typeof fieldError === 'object' && fieldError !== null) {
-            if (fieldError.non_field_errors) {
-              return Array.isArray(fieldError.non_field_errors) ? fieldError.non_field_errors[0] : String(fieldError.non_field_errors);
-            }
-            if (fieldError.message) {
-              return String(fieldError.message);
-            }
-            const keys = Object.keys(fieldError);
-            if (keys.length > 0) {
-              return String(fieldError[keys[0]]);
-            }
-            return "Invalid value";
-          }
-          return String(fieldError);
-        };
-
-        // Map API field names to form field names
-        const newFieldErrors: Record<string, string> = {};
-        
-        Object.keys(errorData).forEach((key) => {
-          if (key === 'detail' || key === 'message' || key === 'error' || key === 'non_field_errors') {
-            return;
-          }
-          
-          let formFieldName = '';
-          switch (key) {
-            case 'email':
-              formFieldName = 'email';
-              break;
-            case 'phone_number':
-              formFieldName = 'phone_number';
-              break;
-            case 'national_id':
-              formFieldName = 'national_id';
-              break;
-            case 'first_name':
-              formFieldName = 'first_name';
-              break;
-            case 'last_name':
-              formFieldName = 'last_name';
-              break;
-            case 'username':
-              formFieldName = 'email'; // username errors affect email field
-              break;
-            default:
-              formFieldName = key;
-          }
-          
-          if (formFieldName && errorData[key]) {
-            const errorMsg = getErrorMessage(errorData[key]);
-            if (errorMsg && errorMsg !== 'Invalid value') {
-              newFieldErrors[formFieldName] = errorMsg;
-            }
-          }
-        });
-
-        if (Object.keys(newFieldErrors).length > 0) {
-          setFieldErrors(newFieldErrors);
-        }
-
-        // Get general error message
-        let errorMessage = "";
-        if (errorData.detail) {
-          errorMessage = Array.isArray(errorData.detail) ? errorData.detail[0] : String(errorData.detail);
-        } else if (errorData.message) {
-          errorMessage = Array.isArray(errorData.message) ? errorData.message[0] : String(errorData.message);
-        } else if (errorData.error) {
-          errorMessage = Array.isArray(errorData.error) ? errorData.error[0] : String(errorData.error);
-        } else if (Object.keys(newFieldErrors).length > 0) {
-          errorMessage = "Please fix the errors in the form fields";
-        } else {
-          errorMessage = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
-        }
-
-        if (!errorMessage) {
-          errorMessage = `Create failed (${res.status})`;
-        }
-
-        // Only show general error if there are no field-specific errors
-        if (Object.keys(newFieldErrors).length === 0) {
-          setFormError(errorMessage);
-        } else {
-          setFormError("Please fix the errors below");
-        }
-        
+        const failure = await readFormErrors(res);
+        setFieldErrors(failure.fields);
+        setFormError(failure.message);
         return;
       }
 
@@ -507,10 +421,11 @@ export default function UsersPage() {
 
       // success banner for 3s
       setSuccessTitle("User Created");
-      setSuccessMsg("User created successfully. A reset password email will be sent if configured.");
+      setSuccessMsg("User created successfully. Use the initial temporary password for the first sign-in, then choose a new password.");
       setSuccessOpen(true);        // open success modal
 
       // reset + close
+      setTemporaryPassword("");
       setForm({
         first_name: "",
         last_name: "",
@@ -560,7 +475,7 @@ export default function UsersPage() {
         status: editForm.status || "active",
       };
 
-      if (canAssignAnyRole) {
+      if (can("cas_app.change_user")) {
         payload.groups = editForm.group ? [editForm.group] : [];
       } else if (isFocalPerson) {
         // Focal Person can only assign Citizen role
@@ -568,6 +483,7 @@ export default function UsersPage() {
         payload.groups = citizenGroup ? [citizenGroup] : [];
       }
 
+      if (mode === "keycloak") { delete payload.email; delete payload.username; }
       const res = await authFetch(`${API_URL}/users/${selectedUser.id}/`, {
         method: "PATCH",
         headers: {
@@ -658,6 +574,7 @@ export default function UsersPage() {
 
           <Button
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            disabled={!canCreateUser}
             onClick={() => {
               setFormError("");
               setOpenDialog(true);
@@ -765,6 +682,7 @@ export default function UsersPage() {
                           setEditError("");
                           setEditModalOpen(true);
                         }}
+                        disabled={!can("cas_app.change_user")}
                         title="Edit"
                       >
                         <Pencil className="h-4 w-4 text-green-500" />
@@ -877,9 +795,23 @@ export default function UsersPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {mode === "keycloak" && <div className="space-y-2">
+            <label htmlFor="new-user-password">Initial temporary password *</label>
+            <Input id="new-user-password" type="password" autoComplete="new-password" required minLength={8}
+              value={temporaryPassword} aria-invalid={Boolean(fieldErrors.password)} aria-describedby="new-user-password-help new-user-password-error"
+              className={fieldErrors.password ? "border-red-500" : ""}
+              onChange={e => { setTemporaryPassword(e.target.value); setFieldErrors(previous => { const next = {...previous}; delete next.password; return next; }); }} />
+            <p id="new-user-password-help" className="text-sm text-gray-500">Use at least 8 characters. Avoid common or entirely numeric passwords. The user must change this password at first sign-in.</p>
+            {fieldErrors.password && <p id="new-user-password-error" role="alert" className="text-sm text-red-600">{fieldErrors.password}</p>}
+          </div>}
             <div>
+              <label htmlFor="new-user-email" className="mb-1 block text-sm font-medium">{mode === "keycloak" ? "Email *" : "Email (optional)"}</label>
               <Input
-                placeholder="Email (optional)"
+                id="new-user-email"
+                placeholder={mode === "keycloak" ? "Email *" : "Email (optional)"}
+                required={mode === "keycloak"}
+                aria-invalid={Boolean(fieldErrors.email)}
+                aria-describedby="new-user-email-error"
                 type="email"
                 value={form.email}
                 onChange={(e) => {
@@ -895,7 +827,7 @@ export default function UsersPage() {
                 className={fieldErrors.email ? "border-red-500" : ""}
               />
               {fieldErrors.email && (
-                <p className="mt-1 text-xs text-red-500">{fieldErrors.email}</p>
+                <p id="new-user-email-error" role="alert" className="mt-1 text-xs text-red-500">{fieldErrors.email}</p>
               )}
             </div>
             <div>

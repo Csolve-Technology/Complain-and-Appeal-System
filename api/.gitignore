@@ -94,3 +94,5 @@ dmypy.json
 .pytype/
 # Cython debug symbols
 cython_debug/
+# Application schema migrations must ship with releases.
+!cas_app/migrations/*.py

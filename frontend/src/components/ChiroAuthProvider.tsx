@@ -5,8 +5,8 @@ import { configureAuth, initializeSso, getCachedAccessToken, signIn, signUp, sig
 import { authFetch, installAxiosAuth } from "@/services/auth-http";
 import { defaultRouteForRole } from "@/lib/role";
 
-type Session = { requireVerifiedEmail: boolean; mode: "local" | "keycloak"; error: string | null; signIn: () => Promise<void>; signUp: () => Promise<void>; signOut: () => Promise<void> };
-const Context = createContext<Session>({ requireVerifiedEmail: true, mode: "keycloak", error: null, signIn, signUp, signOut });
+type Session = { permissions: string[]; can: (permission: string) => boolean; requireVerifiedEmail: boolean; mode: "local" | "keycloak"; error: string | null; signIn: () => Promise<void>; signUp: () => Promise<void>; signOut: () => Promise<void> };
+const Context = createContext<Session>({ permissions: [], can: () => false, requireVerifiedEmail: true, mode: "keycloak", error: null, signIn, signUp, signOut });
 export const useChiroAuth = () => useContext(Context);
 let startup: Promise<AuthSettings> | undefined;
 function start() {
@@ -21,6 +21,7 @@ function start() {
   return startup;
 }
 export function ChiroAuthProvider({ children }: { children: ReactNode }) {
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<"local" | "keycloak">("keycloak");
   const [requireVerifiedEmail, setRequireVerifiedEmail] = useState(true);
@@ -29,6 +30,8 @@ export function ChiroAuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const pathname = usePathname();
+  const isPublicAuthRoute = pathname === "/login" || pathname === "/auth/sign-in" || pathname === "/auth/sign-up";
+  const redirectingAuthenticatedUser = authorized && (pathname === "/" || pathname === "/login" || pathname?.startsWith("/auth"));
   useEffect(() => {
     let active = true;
     const hydrate = async () => {
@@ -37,26 +40,31 @@ export function ChiroAuthProvider({ children }: { children: ReactNode }) {
       const me = await response.json();
       if (!response.ok) throw new Error(me.detail || me.message || "Unable to sign in to CAS.");
       if (!active) return;
+      setPermissions(Array.isArray(me.permissions) ? me.permissions : []);
+      localStorage.setItem("user_permissions", JSON.stringify(me.permissions || []));
       localStorage.setItem("user_groups", JSON.stringify(me.user_groups || []));
       localStorage.setItem("user_id", String(me.id));
       localStorage.setItem("role", me.user_groups?.[0] || "");
       setRole(me.user_groups?.[0] || ""); setAuthorized(true); setError(null);
     };
-    start().then(async config => { if (active) { setMode(config.mode); setRequireVerifiedEmail(config.requireVerifiedEmail !== false); } if (config.mode === "keycloak") await hydrate(); })
+    start().then(async config => { if (active) { setMode(config.mode); setRequireVerifiedEmail(config.requireVerifiedEmail !== false); } await hydrate(); })
       .catch(e => { if (active) { setError(e.message); setAuthorized(false); } })
       .finally(() => { if (active) setReady(true); });
-    const ended = () => { if (active) { setAuthorized(false); setError("Your session ended. Please sign in again."); } };
+    const ended = () => { if (active) { setAuthorized(false); setPermissions([]); setError("Your session ended. Please sign in again."); } };
     const refreshed = () => { void hydrate().catch(e => { if (active) { setAuthorized(false); setError(e.message); } }); };
     window.addEventListener("cas:session-ended", ended);
     window.addEventListener("cas:token-refreshed", refreshed);
     return () => { active = false; window.removeEventListener("cas:session-ended", ended); window.removeEventListener("cas:token-refreshed", refreshed); };
   }, []);
   useEffect(() => {
-    if (!ready || mode !== "keycloak") return;
-    if (!authorized && pathname !== "/auth/sign-in" && pathname !== "/login" && pathname !== "/auth/sign-up") router.replace("/auth/sign-in");
-    if (authorized && (pathname === "/" || pathname === "/login" || pathname?.startsWith("/auth"))) router.replace(defaultRouteForRole(role));
-  }, [ready, mode, authorized, pathname, role, router]);
-  if (!ready) return <div className="flex min-h-screen items-center justify-center">Loading CAS sign-in...</div>;
-  if (mode === "keycloak" && !authorized && pathname !== "/auth/sign-in" && pathname !== "/login" && pathname !== "/auth/sign-up") return <div className="p-8">Redirecting to sign-in...</div>;
-  return <Context.Provider value={{ mode, requireVerifiedEmail, error, signIn, signUp, signOut }}>{children}</Context.Provider>;
+    if (!ready) return;
+    if (mode === "keycloak" && !authorized && !isPublicAuthRoute) router.replace("/auth/sign-in");
+    if (redirectingAuthenticatedUser) router.replace(defaultRouteForRole(role));
+  }, [ready, mode, authorized, isPublicAuthRoute, redirectingAuthenticatedUser, role, router]);
+  // Keep children unmounted until navigation completes; an effect alone allows
+  // the sign-in form to paint for one frame after a successful session check.
+  if (!ready || redirectingAuthenticatedUser || (mode === "keycloak" && !authorized && !isPublicAuthRoute)) {
+    return <div role="status" aria-live="polite" className="flex min-h-screen items-center justify-center">{ready && redirectingAuthenticatedUser ? "Opening CAS..." : "Checking your session..."}</div>;
+  }
+  return <Context.Provider value={{ mode, requireVerifiedEmail, error, signIn, signUp, signOut, permissions, can: permission => permissions.includes(permission) }}>{children}</Context.Provider>;
 }

@@ -22,7 +22,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id", "username", "first_name", "last_name", 
-            "email", "phone_number", "national_id", "address",
+            "email", "phone_number", "national_id", "address", "office",
             "profile_image", "profile_image_url",
             "last_seen", "status",
             "deleted_by", "added_by", "status_changed_by", 

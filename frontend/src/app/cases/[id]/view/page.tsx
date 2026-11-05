@@ -1,5 +1,6 @@
 "use client";
 
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useParams, useRouter } from "next/navigation";
@@ -99,6 +100,7 @@ const fetchAllPaginated = async <T,>(
 
 /* ---------------- Page ---------------- */
 export default function CaseViewPage() {
+  const { can } = useChiroAuth();
   const { id } = useParams();
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
@@ -208,7 +210,7 @@ export default function CaseViewPage() {
   const roleFromStorage = typeof window !== "undefined" ? localStorage.getItem("role") : null;
   
   // Dynamic role checking - check if user has any non-citizen role
-  const isCitizen = currentUserGroups.includes("Citizen") || roleFromStorage === "Citizen";
+  const isCitizen = !can("cas_app.view_all_cases");
   const hasStaffRole = currentUserGroups.some(
     (role) => role !== "Citizen"
   ) || (roleFromStorage && roleFromStorage !== "Citizen");
@@ -239,9 +241,9 @@ export default function CaseViewPage() {
   }, [API_URL, token, hasStaffRole, headers]);
   
   // Dynamic permission checking
-  const canManageCase = hasStaffRole; // Any non-citizen role can manage
-  const canAssign = userHierarchy?.can_assign !== false; // Default to true if not configured
-  const canChangeStatus = userHierarchy?.can_change_status !== false; // Default to true if not configured
+  const canManageCase = can("cas_app.change_case"); // Any non-citizen role can manage
+  const canAssign = can("cas_app.add_assignment") && userHierarchy?.can_assign !== false; // Default to true if not configured
+  const canChangeStatus = can("cas_app.change_case") && userHierarchy?.can_change_status !== false; // Default to true if not configured
 
   /* -------- load data -------- */
   const loadCase = async () => {
@@ -316,10 +318,10 @@ export default function CaseViewPage() {
   // Director can transfer to Mayor Office, so show button if hierarchy exists
   // Even if no target offices found, show button and let backend validate
   // For Director role, if hierarchy exists, they should be able to transfer
-  const canTransfer = hasStaffRole && userHierarchy !== null;
+  const canTransfer = can("cas_app.add_transfer") && userHierarchy !== null;
 
   const loadOffices = async () => {
-    if (!API_URL || !token) return;
+    if (!API_URL || !token || !can("cas_app.view_office")) return;
     try {
       setLoadingOffices(true);
       const list = await fetchAllPaginated<ApiOffice>(`${API_URL}/offices/`, headers);
@@ -332,7 +334,7 @@ export default function CaseViewPage() {
   };
 
   const loadMembers = async () => {
-    if (!API_URL || !token) return;
+    if (!API_URL || !token || !can("cas_app.add_assignment")) return;
     try {
       setLoadingMembers(true);
       // Use the new assignable-users endpoint which filters based on role
@@ -342,15 +344,7 @@ export default function CaseViewPage() {
         const assignableUsers = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : []);
         setMembers(assignableUsers);
       } else {
-        // Fallback to old method if endpoint doesn't exist yet
-      const list = await fetchAllPaginated<ApiUser>(`${API_URL}/users/`, headers);
-      const filtered = (list || []).filter((u) => {
-        const groups = (u?.groups || [])
-          .map((g) => (typeof g === "string" ? g : g?.name))
-          .filter(Boolean) as string[];
-        return !groups.includes("Citizen");
-      });
-      setMembers(filtered);
+        setMembers([]);
       }
     } catch {
       setMembers([]);
@@ -380,7 +374,7 @@ export default function CaseViewPage() {
           const assignedUser = members.find((u) => String(u.id) === String(toUserId));
           if (assignedUser) {
             userName = `${assignedUser.first_name || ""} ${assignedUser.last_name || ""}`.trim() || assignedUser.email || assignedUser.username || "Unknown User";
-          } else if (toUserId) {
+          } else if (toUserId && can("cas_app.view_user")) {
             // Try to fetch user details if not in members list
             try {
               const userRes = await authFetch(`${API_URL}/users/${toUserId}/`, { headers });

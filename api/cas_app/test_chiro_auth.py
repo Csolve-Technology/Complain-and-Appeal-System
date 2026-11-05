@@ -95,9 +95,9 @@ class ChiroAuthTests(TestCase):
         for role, group in [("ADMIN","Admin"),("MAYOR_OFFICE","Mayor Office"),("DIRECTOR","Director"),("FOCAL_PERSON","Focal Person"),("CITIZEN","Citizen")]:
             with self.subTest(role=role):
                 response=self.get(self.token(resource_access={"cas-api":{"roles":[role]}})); self.assertEqual(response.status_code,200,response.data); self.assertEqual(response.data["user_groups"],[group])
-    def test_highest_role_wins_for_existing_single_role_workflows(self):
+    def test_all_granted_roles_are_retained_with_primary_role_first(self):
         response=self.get(self.token(resource_access={"cas-api":{"roles":["CITIZEN","ADMIN"]}}))
-        self.assertEqual(response.data["user_groups"],["Admin"])
+        self.assertEqual(response.data["user_groups"],["Admin", "Citizen"])
     def test_citizens_only_see_own_cases(self):
         user_id = self.get().data["id"]
         other = get_user_model().objects.create_user(username="other")
@@ -109,7 +109,7 @@ class ChiroAuthTests(TestCase):
         for path in ["/api/login/","/api/password/change/","/api/password/forgot/","/api/password/reset/","/admin/login/"]:
             self.assertEqual(self.client.post(path,{}).status_code,403)
     def test_registration_and_local_role_updates_are_disabled(self):
-        response=self.client.post("/api/users/",{"username":"bypass","password":"password"}); self.assertEqual(response.status_code,403,response.data)
+        response=self.client.post("/api/users/",{"username":"bypass","password":"password"}); self.assertEqual(response.status_code,401,response.data)
         user_id=self.get().data["id"]
         response=self.client.patch(f"/api/users/{user_id}/",{"groups":["Admin"]},format="json",HTTP_AUTHORIZATION="Bearer "+self.token()); self.assertEqual(response.status_code,403,response.data)
     def test_removed_roles_deny_even_previously_provisioned_user(self):
@@ -144,3 +144,33 @@ class ChiroAuthTests(TestCase):
         response=self.client.get('/api/auth/config/')
         self.assertEqual(response.status_code,200)
         self.assertFalse(response.data['requireVerifiedEmail'])
+
+    def test_custom_role_permissions_are_resolved_from_only_cas_client(self):
+        group=Group.objects.create(name="Case auditor")
+        group.permissions.add(Permission.objects.get(content_type__app_label="cas_app",codename="view_case"))
+        token=self.token(resource_access={"cas-api":{"roles":["Case auditor"]}})
+        response=self.get(token)
+        self.assertEqual(response.status_code,200,response.data)
+        self.assertEqual(response.data["user_groups"],["Case auditor"])
+        self.assertIn("cas_app.view_case",response.data["permissions"])
+        self.assertEqual(self.get(token,path="/api/cases/").status_code,200)
+        self.assertEqual(self.get(token,path="/api/users/").status_code,403)
+    def test_applicant_with_default_group_and_staff_role_is_not_forced_to_citizen_scope(self):
+        response=self.get(self.token(resource_access={"cas-api":{"roles":["ADMIN","CITIZEN"]}}))
+        self.assertEqual(response.status_code,200,response.data)
+        other=get_user_model().objects.create_user(username="other")
+        case=Case.objects.create(citizen_id=other,title="Staff case")
+        response=self.get(self.token(resource_access={"cas-api":{"roles":["ADMIN","CITIZEN"]}}),path="/api/cases/")
+        self.assertIn(case.pk,[item["id"] for item in response.data])
+    def test_stale_token_cannot_restore_removed_role(self):
+        response=self.get();user=get_user_model().objects.get(pk=response.data["id"])
+        user.keycloak_roles_valid_after=int(time.time())+1;user.save()
+        self.assertEqual(self.get().status_code,401)
+    def test_applicant_cannot_read_user_directory_or_change_ownership(self):
+        user_id=self.get().data["id"]
+        other=get_user_model().objects.create_user(username="someone-else")
+        self.assertEqual(self.get(path="/api/users/").status_code,403)
+        response=self.client.post("/api/cases/", {"citizen_id":other.pk,"reported_by":other.pk,"title":"Applicant case","status":"closed"}, format="json", HTTP_AUTHORIZATION="Bearer "+self.token())
+        self.assertEqual(response.status_code,201,response.data)
+        self.assertEqual(response.data["citizen_id"],user_id);self.assertEqual(response.data["reported_by"],user_id)
+        self.assertEqual(response.data["status"],"pending")

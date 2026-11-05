@@ -1,8 +1,10 @@
 "use client";
 
+import { readFormErrors } from "@/lib/form-errors";
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Breadcrumb from "@/components/Breadcrumbs/Breadcrumb";
 import {
   Table,
@@ -62,6 +64,8 @@ type Row = {
 };
 
 export default function ComplaintAppealPage() {
+  const { can, mode } = useChiroAuth();
+  const [temporaryPassword, setTemporaryPassword] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [search, setSearch] = useState<string>("");
   const [date, setDate] = useState<Date | undefined>();
@@ -156,7 +160,7 @@ export default function ComplaintAppealPage() {
     }
   }, []);
 
-  const isCitizen = currentUserGroups.includes("Citizen");
+  const isCitizen = !can("cas_app.view_all_cases");
 
   /** Fetch ALL pages of /cases/ (works for array OR DRF pagination {results,next}) */
   const fetchAllCases = async (
@@ -222,8 +226,9 @@ export default function ComplaintAppealPage() {
   };
 
   // Load users for "Reported By" dropdown
-  const loadUsers = async () => {
-    if (!API_URL || !token) return;
+  const canViewUsers = can("cas_app.view_user");
+  const loadUsers = useCallback(async () => {
+    if (!API_URL || !token || !canViewUsers) return;
     try {
       setLoadingUsers(true);
       const res = await authFetch(`${API_URL}/users/`, {
@@ -243,13 +248,14 @@ export default function ComplaintAppealPage() {
     } finally {
       setLoadingUsers(false);
     }
-  };
+  }, [API_URL, token, canViewUsers]);
 
   useEffect(() => {
     loadCases();
-    loadUsers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => { void loadUsers(); }, [loadUsers]);
 
   const filteredData = useMemo(() => {
     return rows.filter((item) => {
@@ -331,7 +337,8 @@ export default function ComplaintAppealPage() {
 
           <Button
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            onClick={() => setOpenDialog(true)}
+            disabled={!can("cas_app.add_case")}
+                  onClick={() => setOpenDialog(true)}
           >
             + Add New
           </Button>
@@ -411,6 +418,7 @@ export default function ComplaintAppealPage() {
                         size="icon"
                         variant="ghost"
                         onClick={() => router.push(`/cases/${item.id}/edit`)}
+                        disabled={!can("cas_app.change_case")}
                         title="Edit"
                       >
                         <Pencil className="h-4 w-4 text-green-500" />
@@ -423,6 +431,7 @@ export default function ComplaintAppealPage() {
                             setCaseToDelete(item);
                             setDeleteConfirmOpen(true);
                           }}
+                          disabled={!can("cas_app.delete_case")}
                           title="Delete"
                         >
                           <Trash2 className="h-4 w-4 text-red-500" />
@@ -754,8 +763,8 @@ export default function ComplaintAppealPage() {
             )}
           </div>
 
-          {/* Reported By Field */}
-          <div>
+          {/* Only directory readers can select another reporter. */}
+          {can("cas_app.view_user") && <div>
             <label className="mb-1 block text-sm font-medium">
               Reported By (Optional)
             </label>
@@ -780,16 +789,16 @@ export default function ComplaintAppealPage() {
                   )}
                 </SelectContent>
               </Select>
-              <Button
+              {can("cas_app.add_user") && <Button
                 type="button"
                 onClick={() => setUserModalOpen(true)}
                 className="bg-green-600 text-white hover:bg-green-700 whitespace-nowrap"
               >
                 <Plus className="h-4 w-4 mr-1" />
                 Add User
-              </Button>
+              </Button>}
             </div>
-          </div>
+          </div>}
 
           <div>
             <label className="mb-1 block text-sm font-medium">
@@ -852,6 +861,11 @@ export default function ComplaintAppealPage() {
             // Client-side validation
             const errors: Record<string, string> = {};
             
+    if (mode === "keycloak") {
+      if (!userForm.email.trim()) errors.email = "Email is required for Chiro Auth accounts.";
+      if (!temporaryPassword) errors.password = "Enter an initial temporary password.";
+    }
+
             if (!userForm.first_name?.trim()) {
               errors.first_name = "First name is required";
             }
@@ -888,7 +902,8 @@ export default function ComplaintAppealPage() {
                 last_name: userForm.last_name.trim(),
                 phone_number: userForm.phone_number.trim(),
                 status: "active",
-                groups: ["Citizen"], // Default to Citizen role
+                groups: ["Citizen"],
+                ...(mode === "keycloak" ? { password: temporaryPassword } : {}),
               };
 
               // Add optional fields only if they have values
@@ -909,105 +924,9 @@ export default function ComplaintAppealPage() {
               });
 
               if (!res.ok) {
-                let errorData: any = {};
-                const responseText = await res.text();
-                
-                try {
-                  errorData = JSON.parse(responseText);
-                } catch {
-                  errorData = { detail: responseText || res.statusText };
-                }
-
-                // Helper function to extract error message
-                const getErrorMessage = (fieldError: any): string => {
-                  if (Array.isArray(fieldError)) {
-                    return fieldError[0] || "Invalid value";
-                  }
-                  if (typeof fieldError === 'object' && fieldError !== null) {
-                    if (fieldError.non_field_errors) {
-                      return Array.isArray(fieldError.non_field_errors) ? fieldError.non_field_errors[0] : String(fieldError.non_field_errors);
-                    }
-                    if (fieldError.message) {
-                      return String(fieldError.message);
-                    }
-                    const keys = Object.keys(fieldError);
-                    if (keys.length > 0) {
-                      return String(fieldError[keys[0]]);
-                    }
-                    return "Invalid value";
-                  }
-                  return String(fieldError);
-                };
-
-                // Map API field names to form field names
-                const newFieldErrors: Record<string, string> = {};
-                
-                Object.keys(errorData).forEach((key) => {
-                  if (key === 'detail' || key === 'message' || key === 'error' || key === 'non_field_errors') {
-                    return;
-                  }
-                  
-                  let formFieldName = '';
-                  switch (key) {
-                    case 'email':
-                      formFieldName = 'email';
-                      break;
-                    case 'phone_number':
-                      formFieldName = 'phone_number';
-                      break;
-                    case 'national_id':
-                      formFieldName = 'national_id';
-                      break;
-                    case 'first_name':
-                      formFieldName = 'first_name';
-                      break;
-                    case 'last_name':
-                      formFieldName = 'last_name';
-                      break;
-                    case 'username':
-                      formFieldName = 'email'; // username errors affect email field
-                      break;
-                    default:
-                      formFieldName = key;
-                  }
-                  
-                  if (formFieldName && errorData[key]) {
-                    const errorMsg = getErrorMessage(errorData[key]);
-                    if (errorMsg && errorMsg !== 'Invalid value') {
-                      newFieldErrors[formFieldName] = errorMsg;
-                    }
-                  }
-                });
-
-                if (Object.keys(newFieldErrors).length > 0) {
-                  setUserFieldErrors(newFieldErrors);
-                }
-
-                // Get general error message
-                let errorMessage = "";
-                if (errorData.detail) {
-                  errorMessage = Array.isArray(errorData.detail) ? errorData.detail[0] : String(errorData.detail);
-                } else if (errorData.message) {
-                  errorMessage = Array.isArray(errorData.message) ? errorData.message[0] : String(errorData.message);
-                } else if (errorData.error) {
-                  errorMessage = Array.isArray(errorData.error) ? errorData.error[0] : String(errorData.error);
-                } else if (Object.keys(newFieldErrors).length > 0) {
-                  errorMessage = "Please fix the errors in the form fields";
-                } else {
-                  errorMessage = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
-                }
-
-                if (!errorMessage) {
-                  errorMessage = `Create failed (${res.status})`;
-                }
-
-                // Only show general error if there are no field-specific errors
-                if (Object.keys(newFieldErrors).length === 0) {
-                  setUserFormError(errorMessage);
-                } else {
-                  setUserFormError("Please fix the errors below");
-                }
-                
+                const failure = await readFormErrors(res);
+                setUserFieldErrors(failure.fields);
+                setUserFormError(failure.message);
                 return;
               }
 
@@ -1031,6 +950,7 @@ export default function ComplaintAppealPage() {
               setUserFieldErrors({});
 
               // Show success message
+              setTemporaryPassword("");
               setSuccessMsg("User created successfully and selected as 'Reported By'.");
               setSuccessOpen(true);
               setTimeout(() => setSuccessOpen(false), 3000);
@@ -1041,6 +961,15 @@ export default function ComplaintAppealPage() {
             }
           }}
         >
+          {mode === "keycloak" && <div className="space-y-2">
+            <label htmlFor="case-user-password">Initial temporary password *</label>
+            <Input id="case-user-password" type="password" autoComplete="new-password" required minLength={8}
+              value={temporaryPassword} aria-invalid={Boolean(userFieldErrors.password)} aria-describedby="case-user-password-help case-user-password-error"
+              className={userFieldErrors.password ? "border-red-500" : ""}
+              onChange={e => { setTemporaryPassword(e.target.value); setUserFieldErrors(previous => { const next = {...previous}; delete next.password; return next; }); }} />
+            <p id="case-user-password-help" className="text-sm text-gray-500">Use at least 8 characters. Avoid common or entirely numeric passwords. The user must change this password at first sign-in.</p>
+            {userFieldErrors.password && <p id="case-user-password-error" role="alert" className="text-sm text-red-600">{userFieldErrors.password}</p>}
+          </div>}
           {/* General error message at top */}
           {userFormError && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
@@ -1101,8 +1030,13 @@ export default function ComplaintAppealPage() {
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div>
+              <label htmlFor="case-user-email" className="mb-1 block text-sm font-medium">{mode === "keycloak" ? "Email *" : "Email (optional)"}</label>
               <Input
-                placeholder="Email (optional)"
+                id="case-user-email"
+                placeholder={mode === "keycloak" ? "Email *" : "Email (optional)"}
+                required={mode === "keycloak"}
+                aria-invalid={Boolean(userFieldErrors.email)}
+                aria-describedby="case-user-email-error"
                 type="email"
                 value={userForm.email}
                 onChange={(e) => {
@@ -1118,7 +1052,7 @@ export default function ComplaintAppealPage() {
                 className={userFieldErrors.email ? "border-red-500" : ""}
               />
               {userFieldErrors.email && (
-                <p className="mt-1 text-xs text-red-500">{userFieldErrors.email}</p>
+                <p id="case-user-email-error" role="alert" className="mt-1 text-xs text-red-500">{userFieldErrors.email}</p>
               )}
             </div>
             <div>

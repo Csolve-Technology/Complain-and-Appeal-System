@@ -209,3 +209,7 @@ if AUTH_MODE == 'keycloak':
         raise RuntimeError('Invalid Chiro Auth configuration; production requires HTTPS.')
 
 CAS_REQUIRE_VERIFIED_EMAIL = os.environ.get('CAS_REQUIRE_VERIFIED_EMAIL', 'true').lower() == 'true'
+
+# Management credentials are backend-only; never expose them through auth/config.
+KEYCLOAK_ADMIN_CLIENT_ID = os.environ.get("KEYCLOAK_ADMIN_CLIENT_ID", "cas-provisioner")
+KEYCLOAK_ADMIN_CLIENT_SECRET = os.environ.get("KEYCLOAK_ADMIN_CLIENT_SECRET", "")

@@ -1,5 +1,6 @@
 "use client";
 
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useEffect, useMemo, useState } from "react";
@@ -193,6 +194,7 @@ function filterMocks(
 /* ===================== Page ===================== */
 
 export default function ReportsPage() {
+  const { can } = useChiroAuth();
   const router = useRouter();
 
   const token =
@@ -204,7 +206,7 @@ export default function ReportsPage() {
 
   // Guard
   useEffect(() => {
-    if (!role || !allowedRoles.has(role)) {
+    if (!can("cas_app.view_case")) {
       router.replace("/dashboard");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

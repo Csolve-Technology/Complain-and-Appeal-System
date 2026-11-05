@@ -1,4 +1,5 @@
 "use client";
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useEffect, useMemo, useState } from "react";
@@ -71,36 +72,15 @@ const mapRow = (g: ApiGroup): Row => ({
 /* ---------------- Page ---------------- */
 
 export default function RolesPage() {
+  const { can } = useChiroAuth();
+  const [syncMessage, setSyncMessage] = useState("");
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const token =
     typeof window !== "undefined" ? getCachedAccessToken() : null;
 
   // Check if user is Admin
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [checkingAdmin, setCheckingAdmin] = useState(true);
-
-  useEffect(() => {
-    const checkAdmin = () => {
-      if (typeof window === "undefined") {
-        setCheckingAdmin(false);
-        return;
-      }
-      try {
-        const raw = localStorage.getItem("user_groups");
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            const groups = parsed.map((g) => (typeof g === "string" ? g : g?.name)).filter(Boolean);
-            setIsAdmin(groups.includes("Admin"));
-          }
-        }
-      } catch {
-        setIsAdmin(false);
-      }
-      setCheckingAdmin(false);
-    };
-    checkAdmin();
-  }, []);
+  const isAdmin = can("auth.view_group");
+  const checkingAdmin = false;
 
   // table + search
   const [groups, setGroups] = useState<Row[]>([]);
@@ -391,7 +371,7 @@ export default function RolesPage() {
     if (!editForm.name.trim()) return setDetailsError("Role name is required");
 
     try {
-      setEditing(true);
+      can("auth.change_group") && setEditing(true);
       
       // Update role name
       const res = await authFetch(`${API_URL}/groups/${selected.id}/`, {
@@ -498,6 +478,15 @@ export default function RolesPage() {
   return (
     <>
       <Breadcrumb pageName="Roles" />
+      {can("auth.add_group") && <div className="my-4 space-y-2"><button type="button" className="rounded bg-primary px-4 py-2 text-white" onClick={async () => {
+        try {
+          const response = await authFetch(`${API_URL}/groups/sync-roles/`, { method: "POST" });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || "Unable to synchronize roles.");
+          setSyncMessage("Roles imported. Reload this page to see them; new roles have no permissions until you grant them.");
+        } catch (error) { setSyncMessage(error instanceof Error ? error.message : "Unable to synchronize roles."); }
+      }}>Load Chiro Auth roles</button>{syncMessage && <p role="status">{syncMessage}</p>}</div>}
+
 
       <div
         className={cn(
@@ -519,7 +508,7 @@ export default function RolesPage() {
               setCreateError("");
               setCreateForm({ name: "" });
               setSelectedPermissions([]);
-              setOpenCreate(true);
+              can("auth.add_group") && setOpenCreate(true);
             }}
           >
             <Plus className="mr-2 h-4 w-4" />
@@ -780,7 +769,7 @@ export default function RolesPage() {
                 <Button
                   type="button"
                   className={`${confirmDelete ? "bg-red-700" : "bg-red-600"} text-white hover:bg-red-700`}
-                  onClick={() => (confirmDelete ? handleDelete() : setConfirmDelete(true))}
+                  onClick={() => (confirmDelete ? handleDelete() : can("auth.delete_group") && setConfirmDelete(true))}
                   disabled={deleting || editing}
                 >
                   {deleting ? "Deleting..." : confirmDelete ? "Click to Confirm" : "Delete"}

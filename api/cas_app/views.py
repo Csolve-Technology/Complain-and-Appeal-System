@@ -84,7 +84,11 @@ def current_user(request):
     full_name = f"{user.first_name} {user.last_name}".strip() or user.username
     data['full_name'] = full_name
     # Add user groups for role checking
-    data['user_groups'] = [group.name for group in user.groups.all()]
+    from .chiro_auth import ROLE_GROUPS
+    order = {name:i for i, (_, name) in enumerate(ROLE_GROUPS)}
+    data['user_groups'] = sorted([group.name for group in user.groups.all()], key=lambda n: (order.get(n, 99), n))
+    data['permissions'] = sorted(user.get_all_permissions())
+    data['office'] = user.office_id
     # Add profile_image_url if available
     if user.profile_image:
         data['profile_image_url'] = request.build_absolute_uri(user.profile_image.url)

@@ -1,5 +1,6 @@
 "use client";
 
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { Logo } from "@/components/logo";
@@ -15,6 +16,7 @@ import { useSidebarContext } from "./sidebar-context";
 import { useTranslation } from "@/hooks/useTranslation";
 
 export function Sidebar() {
+  const { can } = useChiroAuth();
   const pathname = usePathname();
   const { setIsOpen, isOpen, isMobile, toggleSidebar } = useSidebarContext();
   const { t } = useTranslation();
@@ -167,37 +169,18 @@ export function Sidebar() {
     }
   }, [userGroups, hasAdmin, hasMayorOffice]);
 
-  // Dynamic filter: Admin and Mayor Office get all access, others check allowedRoles
-  const filterByRole = (
-    items: Array<{ allowedRoles?: string[] } & Record<string, any>>,
-  ) => {
-    // Admin gets full access - bypass all checks
-    if (hasAdmin) {
-      return items;
-    }
-    
-    // Mayor Office also gets full access
-    if (hasMayorOffice) {
-      return items;
-    }
-    
-    return items.filter((it) => {
-      // If no allowedRoles specified, allow access
-      if (!it.allowedRoles || it.allowedRoles.length === 0) {
-        return true;
-      }
-      
-      // Check if user has any of the allowed roles
-      const hasAllowedRole = userGroups.some((userRole) =>
-        it.allowedRoles!.includes(userRole)
-      );
-      
-      // Fallback: check roleFromStorage if userGroups is empty
-      if (!hasAllowedRole && roleFromStorage) {
-        return it.allowedRoles.includes(roleFromStorage);
-      }
-      
-      return hasAllowedRole;
+  const filterByRole = (items: Array<{ allowedRoles?: string[] } & Record<string, any>>): Array<{ allowedRoles?: string[] } & Record<string, any>> => {
+    const required: Record<string, string> = {
+      "/dashboard": "cas_app.view_case", "/users": "cas_app.view_user", "/roles": "auth.view_group",
+      "/offices": "cas_app.view_office", "/cases": "cas_app.view_case", "/cases/activity": "cas_app.view_transfer",
+      "/cases/my-assigned": "cas_app.view_assignment", "/feedback-appeal": "cas_app.view_casefeedback",
+      "/reports": "cas_app.view_case", "/settings": "auth.change_group",
+    };
+    return items.filter(item => {
+      if (item.items?.length) return filterByRole(item.items).length > 0;
+      if (item.url && required[item.url]) return can(required[item.url]);
+      if (item.title === "Announcements") return can("cas_app.view_announcement");
+      return !item.allowedRoles?.length;
     });
   };
 

@@ -14,6 +14,8 @@ from datetime import datetime
 from django.db.models import Count, Q
 from django.utils.dateparse import parse_date
 
+from .access import PermissionMixin, ActionPermission, can, check_grants
+
 User = get_user_model()
 
 class IsSelfOrStaff(permissions.BasePermission):
@@ -39,11 +41,24 @@ class IsDirectorOrAdmin(permissions.BasePermission):
         return False
 
 
-class UserViewSet(viewsets.ModelViewSet):
+class UserViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.user"
     queryset = User.objects.all().order_by("-id")
     serializer_class = UserSerializer
     # default; we'll override per-action in get_permissions()
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action == "create" and settings.AUTH_MODE == "local" and not self.request.user.is_authenticated:
+            return [permissions.AllowAny()]
+        return [ActionPermission()]
+
+    @action(detail=False, methods=["get"], url_path="assignable-roles")
+    def assignable_roles(self, request):
+        from .access import group_permissions
+        own = request.user.get_all_permissions()
+        groups = [g for g in Group.objects.prefetch_related("permissions__content_type").all() if group_permissions([g]).issubset(own)]
+        return Response([{"id":g.pk, "name":g.name} for g in groups])
 
     def get_serializer_context(self):
         """Add request to serializer context for absolute URLs."""
@@ -51,102 +66,40 @@ class UserViewSet(viewsets.ModelViewSet):
         context['request'] = self.request
         return context
 
-    def get_permissions(self):
-        if self.action in ["create"]:               # self-registration
-            return [permissions.AllowAny()]
-        if self.action in ["retrieve", "partial_update", "update"]:
-            return [permissions.IsAuthenticated(), IsSelfOrStaff()]
-        if self.action in ["list", "destroy"]:
-            return [permissions.IsAuthenticated(), IsDirectorOrAdmin()]
-        return super().get_permissions()
-
     def get_queryset(self):
-        # Staff/admins/users with hierarchy level >= Director can list; others can only see self.
-        if self.request.user.is_authenticated:
-            is_staff = self.request.user.is_staff or self.request.user.is_superuser
-            user_hierarchy = get_user_role_hierarchy(self.request.user)
-            is_director_or_above = user_hierarchy and user_hierarchy.hierarchy_level >= 3
-            
-            # Check if user has view_user permission
-            has_view_user = self.request.user.has_perm("cas_app.view_user")
-            
-            if is_staff or is_director_or_above or has_view_user:
-                qs = super().get_queryset().exclude(status="deleted")
-                
-                # Focal Person: filter by office
-                user_groups = [g.name for g in self.request.user.groups.all()]
-                is_focal_person = any("Focal Person" in g for g in user_groups)
-                
-                if is_focal_person and not (is_staff or is_director_or_above):
-                    # Focal Person can only see users in their office
-                    if self.request.user.office:
-                        qs = qs.filter(office=self.request.user.office)
-                    else:
-                        # If focal person has no office, they can only see themselves
-                        qs = qs.filter(pk=self.request.user.pk)
-                
-                return qs
-            # Non-staff/Director: queryset is limited to self to avoid leaking existence via list.
-            return User.objects.filter(pk=self.request.user.pk).exclude(status="deleted")
-        # Fallback for unauthenticated (shouldn't reach here due to permissions, but safety check)
-        return User.objects.none()
+        qs = super().get_queryset().filter(is_deleted=False).exclude(status="deleted")
+        if can(self.request.user, "cas_app.view_user") or can(self.request.user, "cas_app.change_user"):
+            if self.request.user.groups.filter(name="Focal Person").exists():
+                return qs.filter(office=self.request.user.office) if self.request.user.office_id else qs.filter(pk=self.request.user.pk)
+            return qs
+        return qs.filter(pk=self.request.user.pk)
 
     def perform_create(self, serializer):
+        from .identity_management import create_user
+        groups = serializer.validated_data.get("groups") or [Group.objects.get(name="Citizen")]
+        if not self.request.user.is_authenticated:
+            groups = [Group.objects.get(name="Citizen")]
+            serializer.validated_data["status"] = "active"
+        else:
+            check_grants(self.request.user, groups)
+        serializer.validated_data["groups"] = groups
         if settings.AUTH_MODE == "keycloak":
-            raise PermissionDenied("Create accounts and assign CAS roles in Chiro Auth.")
-        # Check if user has add_user permission
-        if self.request.user.is_authenticated:
-            has_add_user = self.request.user.has_perm("cas_app.add_user")
-            user_groups = [g.name for g in self.request.user.groups.all()]
-            is_focal_person = any("Focal Person" in g for g in user_groups)
-            
-            # If not self-registration, check permissions
-            if not has_add_user and not (self.request.user.is_staff or self.request.user.is_superuser):
-                # Focal Person can only create Citizen users
-                if is_focal_person:
-                    # Ensure only Citizen role is assigned
-                    groups = serializer.validated_data.get("groups", [])
-                    citizen_group = Group.objects.filter(name="Citizen").first()
-                    if citizen_group:
-                        serializer.validated_data["groups"] = [citizen_group]
-                    else:
-                        # Create Citizen group if it doesn't exist
-                        citizen_group, _ = Group.objects.get_or_create(name="Citizen")
-                        serializer.validated_data["groups"] = [citizen_group]
-                else:
-                    raise permissions.PermissionDenied("You do not have permission to create users.")
-        
-        # For self-registration, request.user may be Anonymous; added_by stays None.
-        user = serializer.save(added_by=self.request.user if self.request.user.is_authenticated else None)
-
-        # Hash password if provided
-        pwd = serializer.validated_data.get("password")
-        if pwd:
-            user.set_password(pwd)
-            user.save(update_fields=["password"])
-
-        # If no groups specified, put newly registered user into 'Citizen' by default
-        if not serializer.validated_data.get("groups"):
-            citizen_group, _ = Group.objects.get_or_create(name="Citizen")
-            user.groups.add(citizen_group)
-        
-        # Set office for Focal Person created users
-        if self.request.user.is_authenticated:
-            user_groups = [g.name for g in self.request.user.groups.all()]
-            is_focal_person = any("Focal Person" in g for g in user_groups)
-            if is_focal_person and self.request.user.office:
-                user.office = self.request.user.office
-                user.save(update_fields=["office"])
+            create_user(self.request.user, serializer)
+        else:
+            serializer.save(added_by=self.request.user if self.request.user.is_authenticated else None)
 
     def perform_update(self, serializer):
-        if settings.AUTH_MODE == "keycloak" and {"password", "groups", "username", "email"}.intersection(serializer.validated_data):
-            raise PermissionDenied("Manage account credentials and roles in Chiro Auth.")
-        # Only self or staff gets here (checked by IsSelfOrStaff)
-        user = serializer.save(status_changed_by=self.request.user)
-        pwd = serializer.validated_data.get("password")
-        if pwd:
-            user.set_password(pwd)
-            user.save(update_fields=["password"])
+        from .identity_management import update_user
+        actor, target = self.request.user, serializer.instance
+        sensitive = {"groups", "status", "office", "username", "email", "password"}
+        if not can(actor, "cas_app.change_user") and sensitive.intersection(serializer.validated_data):
+            raise PermissionDenied("You may update only your own profile details.")
+        if "groups" in serializer.validated_data:
+            check_grants(actor, serializer.validated_data["groups"], target.groups.all())
+        if settings.AUTH_MODE == "keycloak":
+            update_user(actor, serializer)
+        else:
+            serializer.save(status_changed_by=actor)
 
     def destroy(self, request, *args, **kwargs):
         # Only admins can destroy (permission enforced in get_permissions)
@@ -158,7 +111,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 def is_citizen(user):
-    return user.groups.filter(name="Citizen").exists()
+    return user.is_authenticated and not can(user, "cas_app.view_all_cases")
 
 
 def get_user_hierarchy_level(user):
@@ -171,7 +124,7 @@ def get_user_hierarchy_level(user):
     
     # Get hierarchy for the first group (assuming single primary role)
     try:
-        hierarchy = RoleHierarchy.objects.filter(role__in=user_groups).order_by("hierarchy_level").first()
+        hierarchy = RoleHierarchy.objects.filter(role__in=user_groups).order_by("-hierarchy_level").first()
         return hierarchy.hierarchy_level if hierarchy else None
     except RoleHierarchy.DoesNotExist:
         return None
@@ -186,7 +139,7 @@ def get_user_role_hierarchy(user):
         return None
     
     try:
-        return RoleHierarchy.objects.filter(role__in=user_groups).order_by("hierarchy_level").first()
+        return RoleHierarchy.objects.filter(role__in=user_groups).order_by("-hierarchy_level").first()
     except RoleHierarchy.DoesNotExist:
         return None
 
@@ -279,7 +232,8 @@ class CaseAccessPermission(BasePermission):
         return False
 
 
-class CaseViewSet(viewsets.ModelViewSet):
+class CaseViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.case"
     """
     CRUD for Case with:
     - citizen scoping (citizens only see their cases)
@@ -295,6 +249,9 @@ class CaseViewSet(viewsets.ModelViewSet):
     )
     serializer_class = CaseSerializer
     permission_classes = [permissions.IsAuthenticated, CaseAccessPermission]
+
+    def get_permissions(self):
+        return [ActionPermission(), CaseAccessPermission()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -370,9 +327,11 @@ class CaseViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # If the creator is a citizen, force the case owner to be themselves
         if is_citizen(self.request.user):
-            case = serializer.save(added_by=self.request.user, citizen_id=self.request.user)
+            case = serializer.save(added_by=self.request.user, citizen_id=self.request.user, reported_by=self.request.user, status="pending", parent_case=None)
         else:
             # Staff/internal can create for any citizen; if citizen_id missing, default to current user
+            if not can(self.request.user, "cas_app.view_user"):
+                serializer.validated_data["reported_by"] = self.request.user
             citizen = serializer.validated_data.get("citizen_id") or self.request.user
             case = serializer.save(added_by=self.request.user, citizen_id=citizen)
 
@@ -518,7 +477,8 @@ class CaseViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(appeal_case).data, status=201)
 
 
-class OfficeViewSet(viewsets.ModelViewSet):
+class OfficeViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.office"
     queryset = Office.objects.all().order_by("name")
     serializer_class = OfficeSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -531,7 +491,8 @@ class OfficeViewSet(viewsets.ModelViewSet):
         # update tracking
         serializer.save(updated_by=self.request.user)
         
-class TransferViewSet(viewsets.ModelViewSet):
+class TransferViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.transfer"
     """
     Creates a transfer and, on success, updates the case.office_id to the destination office.
     Enforces upward hierarchy only - transfers can only go to higher level roles.
@@ -539,6 +500,11 @@ class TransferViewSet(viewsets.ModelViewSet):
     queryset = Transfer.objects.select_related("case_id", "from_office_id", "to_office_id")
     serializer_class = TransferSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if is_citizen(self.request.user): return qs.filter(case_id__citizen_id=self.request.user)
+        return qs
 
     def create(self, request, *args, **kwargs):
         # Validate hierarchy before creating transfer
@@ -571,8 +537,20 @@ class TransferViewSet(viewsets.ModelViewSet):
         
         return super().create(request, *args, **kwargs)
 
+    def validate_case_scope(self, case):
+        if case.deleted_by_id or (is_citizen(self.request.user) and case.citizen_id_id != self.request.user.pk):
+            raise PermissionDenied("You cannot manage activity for this case.")
+
+    def perform_update(self, serializer):
+        self.validate_case_scope(serializer.validated_data.get("case_id", serializer.instance.case_id))
+        office = serializer.validated_data.get("to_office_id", serializer.instance.to_office_id)
+        allowed, reason = can_transfer_between_roles(self.request.user, office.office_representative)
+        if not allowed: raise PermissionDenied(reason or "Transfer not allowed.")
+        serializer.save()
+
     @transaction.atomic
     def perform_create(self, serializer):
+        self.validate_case_scope(serializer.validated_data["case_id"])
         transfer = serializer.save()
         # reflect the office move on the case
         case = transfer.case_id
@@ -604,7 +582,8 @@ class TransferViewSet(viewsets.ModelViewSet):
         return Response(ser.data)
 
 
-class AssignmentViewSet(viewsets.ModelViewSet):
+class AssignmentViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.assignment"
     """
     Records a handover between users for a case.
     If from_user_id not supplied, default to request.user for convenience.
@@ -616,6 +595,11 @@ class AssignmentViewSet(viewsets.ModelViewSet):
     queryset = Assignment.objects.select_related("case_id", "from_user_id", "to_user_id")
     serializer_class = AssignmentSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if is_citizen(self.request.user): return qs.filter(case_id__citizen_id=self.request.user)
+        return qs
 
     def create(self, request, *args, **kwargs):
         """Validate assignment permissions before creating."""
@@ -670,7 +654,25 @@ class AssignmentViewSet(viewsets.ModelViewSet):
         
         return super().create(request, *args, **kwargs)
 
+    def validate_case_scope(self, case):
+        if case.deleted_by_id or (is_citizen(self.request.user) and case.citizen_id_id != self.request.user.pk):
+            raise PermissionDenied("You cannot manage activity for this case.")
+
+    def validate_assignment(self, serializer):
+        self.validate_case_scope(serializer.validated_data.get("case_id", serializer.instance.case_id if serializer.instance else None))
+        target = serializer.validated_data.get("to_user_id", serializer.instance.to_user_id if serializer.instance else None)
+        if target is None or is_citizen(target): raise PermissionDenied("Assignments require an active staff recipient.")
+        if not target.is_active or target.is_deleted or target.status != "active": raise PermissionDenied("The recipient is disabled.")
+        if self.request.user.groups.filter(name="Focal Person").exists() and not self.request.user.groups.filter(name__in=["Admin", "Director", "Mayor Office"]).exists():
+            if not self.request.user.office_id or self.request.user.office_id != target.office_id:
+                raise PermissionDenied("You can assign only within your office.")
+
+    def perform_update(self, serializer):
+        self.validate_assignment(serializer)
+        serializer.save()
+
     def perform_create(self, serializer):
+        self.validate_assignment(serializer)
         from_user = serializer.validated_data.get("from_user_id")
         if not from_user:
             # Assume the current actor is handing over the case
@@ -714,16 +716,12 @@ class AssignmentViewSet(viewsets.ModelViewSet):
         is_mayor_office = "Mayor Office" in current_user_groups
         is_focal_person = "Focal Person" in current_user_groups
         
-        # Base queryset: exclude Citizen role users
-        citizen_group = Group.objects.filter(name="Citizen").first()
-        if citizen_group:
-            qs = User.objects.exclude(groups=citizen_group).filter(is_active=True, is_deleted=False)
-        else:
-            qs = User.objects.filter(is_active=True, is_deleted=False)
-        
+        # Explicit staff scope keeps default Citizen + staff memberships assignable.
+        qs = User.objects.filter(is_active=True, is_deleted=False, status="active", groups__permissions__content_type__app_label="cas_app", groups__permissions__codename="view_all_cases").distinct()
+
         # Filter based on role
-        if is_director or is_mayor_office:
-            # Can assign to any office/users
+        if can(request.user, "cas_app.add_assignment") and not is_focal_person:
+            # Permission grants assignment access
             pass  # No additional filtering
         elif is_focal_person:
             # Can only assign to users in their own office
@@ -736,13 +734,12 @@ class AssignmentViewSet(viewsets.ModelViewSet):
             # Other roles - default to empty or add specific rules
             qs = User.objects.none()
         
-        # Serialize and return
-        from .serializers import UserSerializer
-        serializer = UserSerializer(qs.select_related("office"), many=True)
-        return Response(serializer.data)
+        # A picker needs names and IDs, not the protected full user profile.
+        return Response([{"id":u.pk,"first_name":u.first_name,"last_name":u.last_name,"username":u.username,"office":u.office_id} for u in qs])
     
 
-class RoleHierarchyViewSet(viewsets.ModelViewSet):
+class RoleHierarchyViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.rolehierarchy"
     """
     Manage role hierarchy configuration.
     Only staff/superusers can modify hierarchy.
@@ -751,12 +748,6 @@ class RoleHierarchyViewSet(viewsets.ModelViewSet):
     serializer_class = RoleHierarchySerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_permissions(self):
-        # Allow all authenticated users to access read-only actions (GET requests)
-        if self.request.method in ['GET', 'HEAD', 'OPTIONS']:
-            return [permissions.IsAuthenticated()]
-        # Only staff/superusers can modify hierarchy (POST, PUT, PATCH, DELETE)
-        return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
 
     @action(detail=False, methods=["get"], url_path="current-user")
     def current_user_hierarchy(self, request):
@@ -810,7 +801,8 @@ class IsAdminGroup(BasePermission):
         return "Admin" in user_groups or request.user.is_superuser
 
 
-class GroupViewSet(viewsets.ModelViewSet):
+class GroupViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "auth.group"
     """
     /groups/                      GET, POST
     /groups/{id}/                 GET, PUT, PATCH, DELETE
@@ -830,11 +822,34 @@ class GroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = [permissions.IsAuthenticated]
     
-    def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
-            return [permissions.IsAuthenticated()]
-        # Only Admin can create/update/delete groups
-        return [permissions.IsAuthenticated(), IsAdminGroup()]
+    def perform_create(self, serializer):
+        from .identity_management import ensure_group
+        self.check_permission_grants(serializer.validated_data.get("permissions", []))
+        if settings.AUTH_MODE == "keycloak": ensure_group(serializer.validated_data["name"])
+        serializer.save()
+
+    def perform_update(self, serializer):
+        check_grants(self.request.user, [], [serializer.instance])
+        self.check_permission_grants(serializer.validated_data.get("permissions", []))
+        if settings.AUTH_MODE == "keycloak" and serializer.validated_data.get("name", serializer.instance.name) != serializer.instance.name:
+            raise PermissionDenied("Synchronized role names cannot be renamed here.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if settings.AUTH_MODE == "keycloak":
+            raise PermissionDenied("Delete synchronized roles in Chiro Auth after removing their assignments.")
+        check_grants(self.request.user, [], [instance])
+        instance.delete()
+
+    def check_permission_grants(self, permissions):
+        names = {f"{p.content_type.app_label}.{p.codename}" for p in permissions}
+        if not self.request.user.is_superuser and not names.issubset(self.request.user.get_all_permissions()):
+            raise PermissionDenied("You cannot grant permissions beyond your own access.")
+
+    @action(detail=False, methods=["post"], url_path="sync-roles")
+    def sync_roles(self, request):
+        from .identity_management import sync_groups
+        return Response({"roles": sync_groups()})
 
     # optional: filters/search (works out of the box if django-filter installed)
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -857,6 +872,9 @@ class GroupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="add_users")
     def add_users(self, request, pk=None):
         g = self.get_object()
+        if settings.AUTH_MODE == "keycloak":
+            raise PermissionDenied("Assign roles through the Users form so Chiro Auth stays synchronized.")
+        check_grants(request.user, [], [g])
         ids = request.data.get("user_ids", [])
         users = User.objects.filter(id__in=ids)
         for u in users:
@@ -866,6 +884,9 @@ class GroupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="remove_users")
     def remove_users(self, request, pk=None):
         g = self.get_object()
+        if settings.AUTH_MODE == "keycloak":
+            raise PermissionDenied("Assign roles through the Users form so Chiro Auth stays synchronized.")
+        check_grants(request.user, [], [g])
         ids = request.data.get("user_ids", [])
         users = User.objects.filter(id__in=ids)
         for u in users:
@@ -875,6 +896,9 @@ class GroupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["put"], url_path="set_users")
     def set_users(self, request, pk=None):
         g = self.get_object()
+        if settings.AUTH_MODE == "keycloak":
+            raise PermissionDenied("Assign roles through the Users form so Chiro Auth stays synchronized.")
+        check_grants(request.user, [], [g])
         new_ids = set(request.data.get("user_ids", []))
         current_ids = set(g.user_set.values_list("id", flat=True))
 
@@ -901,24 +925,30 @@ class GroupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="add_permissions")
     def add_permissions(self, request, pk=None):
         g = self.get_object()
+        check_grants(request.user, [], [g])
         ids = request.data.get("permission_ids", [])
         perms = Permission.objects.filter(id__in=ids)
+        self.check_permission_grants(perms)
         g.permissions.add(*perms)
         return Response({"added": list(perms.values_list("id", flat=True))}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="remove_permissions")
     def remove_permissions(self, request, pk=None):
         g = self.get_object()
+        check_grants(request.user, [], [g])
         ids = request.data.get("permission_ids", [])
         perms = Permission.objects.filter(id__in=ids)
+        self.check_permission_grants(perms)
         g.permissions.remove(*perms)
         return Response({"removed": list(perms.values_list("id", flat=True))}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["put"], url_path="set_permissions")
     def set_permissions(self, request, pk=None):
         g = self.get_object()
+        check_grants(request.user, [], [g])
         ids = request.data.get("permission_ids", [])
         perms = Permission.objects.filter(id__in=ids)
+        self.check_permission_grants(perms)
         g.permissions.set(perms)
         return Response({"permissions": list(perms.values_list("id", flat=True))}, status=status.HTTP_200_OK)
 
@@ -938,7 +968,8 @@ class ReportsPermission(permissions.BasePermission):
         return request.user and request.user.is_authenticated
 
 
-class ReportsViewSet(viewsets.ViewSet):
+class ReportsViewSet(PermissionMixin, viewsets.ViewSet):
+    permission_model = "cas_app.case"
     permission_classes = [permissions.IsAuthenticated, ReportsPermission]
 
     # ---- helpers ----
@@ -1064,7 +1095,7 @@ class ReportsViewSet(viewsets.ViewSet):
 DIRECTOR_AND_ABOVE = {"Director", "President Office", "President"}
 
 def is_citizen(user):
-    return user.is_authenticated and user.groups.filter(name="Citizen").exists()
+    return user.is_authenticated and not can(user, "cas_app.view_all_cases")
 
 def is_director_or_above(user):
     return user.is_authenticated and user.groups.filter(name__in=DIRECTOR_AND_ABOVE).exists()
@@ -1090,7 +1121,8 @@ class AnnouncementPermission(BasePermission):
             return True
         return request.user.is_superuser or is_director_or_above(request.user)
     
-class CaseFeedbackViewSet(viewsets.ReadOnlyModelViewSet):
+class CaseFeedbackViewSet(PermissionMixin, viewsets.ReadOnlyModelViewSet):
+    permission_model = "cas_app.casefeedback"
     """
     ViewSet for viewing feedback and appeals.
     - Admin, Director, and Focal Person can see all feedback/appeals
@@ -1122,7 +1154,7 @@ class CaseFeedbackViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Citizens only see their own feedback
         if is_citizen(user):
-            qs = qs.filter(created_by=user)
+            qs = qs.filter(case__citizen_id=user)
         # Focal Person sees feedback for cases in their office
         elif hasattr(user, 'office') and user.office:
             qs = qs.filter(case__office_id=user.office)
@@ -1131,7 +1163,8 @@ class CaseFeedbackViewSet(viewsets.ReadOnlyModelViewSet):
         return qs
 
 
-class AnnouncementViewSet(viewsets.ModelViewSet):
+class AnnouncementViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.announcement"
     queryset = Announcement.objects.all()
     serializer_class = AnnouncementSerializer
     permission_classes = [permissions.IsAuthenticated, AnnouncementPermission]
@@ -1149,7 +1182,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
         # Unless privileged, show only active
         user = self.request.user
-        if not (user.is_superuser or is_director_or_above(user)):
+        if not can(user, "cas_app.change_announcement"):
             qs = qs.filter(is_active=True)
 
         # filter by office
@@ -1234,7 +1267,8 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         return Response({"id": ann.id, "is_active": ann.is_active})
 
 
-class NotificationViewSet(viewsets.ModelViewSet):
+class NotificationViewSet(PermissionMixin, viewsets.ModelViewSet):
+    permission_model = "cas_app.notification"
     """
     ViewSet for user notifications.
     Users can only see their own notifications.

@@ -48,6 +48,7 @@ CITIZEN_PERMISSIONS = _unique_permissions(
 FOCAL_CORE_PERMISSIONS = _unique_permissions(
     CITIZEN_PERMISSIONS
     + [
+        "view_all_cases",
         "delete_case",
         "change_casefeedback",
         "delete_casefeedback",
@@ -65,6 +66,7 @@ FOCAL_CORE_PERMISSIONS = _unique_permissions(
 MAYOR_OFFICE_PERMISSIONS = _unique_permissions(
     CITIZEN_PERMISSIONS
     + [
+        "view_all_cases",
         "change_case",
         "view_assignment",
         "view_transfer",

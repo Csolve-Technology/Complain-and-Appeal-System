@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group
 # Create your models here.
 
 class User(AbstractUser):
+    keycloak_roles_valid_after = models.BigIntegerField(default=0)
     keycloak_sub = models.CharField(max_length=255, unique=True, null=True, blank=True)
     keycloak_issuer = models.CharField(max_length=500, null=True, blank=True)
     national_id = models.CharField(max_length=20, unique=True, null=True, blank=True)
@@ -95,6 +96,7 @@ class Case(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        permissions = [("view_all_cases", "Can view cases across applicants")]
 
     def __str__(self):
         return f"{self.title} ({self.get_category_id_display()})"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -135,6 +136,7 @@ const fetchAllPaginated = async <T,>(url: string, headers: HeadersInit): Promise
 /* ===================== Page ===================== */
 
 export default function CaseActivityPage() {
+  const { can } = useChiroAuth();
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const token = typeof window !== "undefined" ? getCachedAccessToken() : null;
   const headers: HeadersInit = useMemo(() => (token ? { Authorization: `Bearer ${token}` } : {}) as HeadersInit, [token]);
@@ -251,8 +253,8 @@ export default function CaseActivityPage() {
       setLoadingOptions(true);
 
       const [officesList, usersList] = await Promise.all([
-        fetchAllPaginated<ApiOffice>(`${API_URL}/offices/`, headers),
-        fetchAllPaginated<ApiUser>(`${API_URL}/users/`, headers),
+        can("cas_app.view_office") ? fetchAllPaginated<ApiOffice>(`${API_URL}/offices/`, headers) : Promise.resolve([]),
+        can("cas_app.add_assignment") ? fetchAllPaginated<ApiUser>(`${API_URL}/assignments/assignable-users/`, headers) : Promise.resolve([]),
       ]);
 
       // Members: exclude Citizen (for assignment dropdown)

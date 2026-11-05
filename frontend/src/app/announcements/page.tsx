@@ -1,5 +1,6 @@
 "use client";
 
+import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { getCachedAccessToken } from "@/services/auth-session";
 import { authFetch } from "@/services/auth-http";
 import { useEffect, useMemo, useState } from "react";
@@ -93,12 +94,13 @@ function toNames(
 /* ===================== Page ===================== */
 
 export default function AnnouncementsPage() {
+  const { can } = useChiroAuth();
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const token = typeof window !== "undefined" ? getCachedAccessToken() : null;
   const role  = typeof window !== "undefined" ? localStorage.getItem("role")  : null;
 
-  const canManage = !!role && allowedToManage.has(role);
+  const canManage = can("cas_app.add_announcement") || can("cas_app.change_announcement") || can("cas_app.delete_announcement");
   const headers: HeadersInit = useMemo(() => (token ? { Authorization: `Bearer ${token}` } : {}) as HeadersInit, [token]);
 
   // Data
@@ -177,8 +179,8 @@ export default function AnnouncementsPage() {
     if (!API_URL || !token) return;
     try {
       const [off, gr] = await Promise.all([
-        fetchAllPaginated<ApiOffice>(`${API_URL}/offices/`, headers),
-        fetchAllPaginated<ApiGroup>(`${API_URL}/groups/`, headers),
+        can("cas_app.view_office") ? fetchAllPaginated<ApiOffice>(`${API_URL}/offices/`, headers) : Promise.resolve([]),
+        can("auth.view_group") ? fetchAllPaginated<ApiGroup>(`${API_URL}/groups/`, headers) : Promise.resolve([]),
       ]);
       setOffices(off);
       setGroups(gr);
