@@ -20,7 +20,7 @@ Set backend environment variables (Compose loads the VPS root `.env`):
 ```env
 AUTH_MODE=keycloak
 KEYCLOAK_URL=https://auth.chirocity.gov.et
-KEYCLOAK_REALM=chirocity
+KEYCLOAK_REALM=cas
 KEYCLOAK_CLIENT_ID=cas-web
 KEYCLOAK_AUDIENCE=cas-api
 KEYCLOAK_ADMIN_CLIENT_ID=cas-provisioner

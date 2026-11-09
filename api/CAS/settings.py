@@ -198,7 +198,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Centralized identity configuration. Local mode is retained until explicit activation.
 AUTH_MODE = os.environ.get('AUTH_MODE', 'local')
 KEYCLOAK_URL = os.environ.get('KEYCLOAK_URL', 'https://auth.chirocity.gov.et').rstrip('/')
-KEYCLOAK_REALM = os.environ.get('KEYCLOAK_REALM', 'chirocity')
+KEYCLOAK_REALM = os.environ.get('KEYCLOAK_REALM', 'cas')
 KEYCLOAK_CLIENT_ID = os.environ.get('KEYCLOAK_CLIENT_ID', 'cas-web')
 KEYCLOAK_AUDIENCE = os.environ.get('KEYCLOAK_AUDIENCE', 'cas-api')
 if AUTH_MODE not in ('local', 'keycloak'):
