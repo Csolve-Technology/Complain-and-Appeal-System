@@ -3,7 +3,7 @@
 ## Identity and applicant registration
 
 CAS uses the `chirocity` realm, public client `cas-web`, and audience `cas-api`.
-The sign-in screen links to **Sign up as an applicant** (`/auth/sign-up`). The button starts Keycloak registration; CAS does not collect a second password.
+CAS opens Keycloak login automatically. Applicants can use its Register link or open `/auth/sign-up`, whose button starts Keycloak registration; CAS does not collect a second password.
 Enable realm registration and make `CAS Applicants` a default group with the `cas-api` client role `CITIZEN`. Set an explicit `cas-api` access-token audience mapper on `cas-web`. Existing realm users need membership assigned explicitly. Keep the built-in `roles`, `profile` and `email` scopes configured so client roles and email are present in the access token.
 
 Production redirect/logout URI: `https://cas.chirocity.gov.et/login`; web origin: `https://cas.chirocity.gov.et`.

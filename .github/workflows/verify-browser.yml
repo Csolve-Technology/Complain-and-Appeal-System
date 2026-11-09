@@ -28,41 +28,41 @@ jobs:
             const page = await browser.newPage();
             try {
               const errors = [];
+              let authorizationUrl;
+              page.on('request', req => {
+                const url = new URL(req.url());
+                if (url.origin === 'https://auth.chirocity.gov.et' && url.pathname.endsWith('/protocol/openid-connect/auth') && url.searchParams.get('client_id') === 'cas-web') authorizationUrl = url;
+              });
               page.on('pageerror', error => { errors.push(error.message); console.log('PAGE ERROR', error.message); });
               page.on('requestfailed', req => console.log('REQUEST FAILED', new URL(req.url()).origin + new URL(req.url()).pathname, req.failure()?.errorText));
               page.on('console', msg => { if (msg.type() === 'error') console.log('BROWSER ERROR', msg.text()); });
               await page.goto('https://cas.chirocity.gov.et/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-              const login = page.getByRole('button', { name: 'Sign in with Chiro Auth' });
-              await login.waitFor({ timeout: 30000 });
-              console.log('CAS central login screen rendered.');
-              for (const viewport of [{ width: 1920, height: 1080 }, { width: 768, height: 1024 }, { width: 375, height: 812 }]) {
-                await page.setViewportSize(viewport);
-                await page.getByRole('link', { name: 'Sign up as an applicant' }).waitFor();
-                const bounds = await page.getByTestId('cas-auth-card').boundingBox();
-                const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-                if (overflow || !bounds || bounds.x < 0 || bounds.x + bounds.width > viewport.width + 1 || bounds.y < 0) throw new Error('Cropped auth layout at '+JSON.stringify(viewport));
-                console.log('Auth layout fits:', JSON.stringify(viewport));
-                await page.screenshot({ path: `cas-login-${viewport.width}.png`, fullPage: true });
-              }
-              await page.getByRole('link', { name: 'Sign up as an applicant' }).click();
-              await page.getByRole('button', { name: 'Create applicant account' }).waitFor();
-              console.log('Applicant sign-up page rendered.');
-              await page.screenshot({ path: 'cas-applicant-signup.png', fullPage: true });
-              await page.getByRole('link', { name: 'Sign in', exact: true }).click();
-              await login.waitFor();
-              await login.click();
               await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
               await page.locator('#username').waitFor({ timeout: 30000 });
-              console.log('Chiro Auth username/password form reached.');
+              console.log('CAS opens Chiro Auth automatically without an intermediate sign-in page.');
+              if (!authorizationUrl || authorizationUrl.searchParams.get('code_challenge_method') !== 'S256' || authorizationUrl.searchParams.get('redirect_uri') !== 'https://cas.chirocity.gov.et/login') throw new Error('Expected cas-web with PKCE S256 and the CAS login callback');
               await page.screenshot({ path: 'chiro-auth-login.png' });
+              await page.goto('https://cas.chirocity.gov.et/auth/sign-up', { waitUntil: 'domcontentloaded', timeout: 60000 });
+              const registration = page.getByRole('button', { name: 'Create applicant account' });
+              await registration.waitFor({ timeout: 30000 });
+              for (const viewport of [{ width: 1920, height: 1080 }, { width: 768, height: 1024 }, { width: 375, height: 812 }]) {
+                await page.setViewportSize(viewport);
+                const bounds = await page.getByTestId('cas-auth-card').boundingBox();
+                const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+                if (overflow || !bounds || bounds.x < 0 || bounds.x + bounds.width > viewport.width + 1 || bounds.y < 0) throw new Error('Cropped registration layout at '+JSON.stringify(viewport));
+                await page.screenshot({ path: `cas-applicant-signup-${viewport.width}.png`, fullPage: true });
+              }
               if (process.env.VERIFY_REGISTRATION === 'true') {
-                await page.goto('https://cas.chirocity.gov.et/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-                await page.getByRole('link', { name: 'Sign up as an applicant' }).click();
-                await page.getByRole('button', { name: 'Create applicant account' }).click();
+                await registration.click();
                 await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
                 await page.locator('#kc-register-form').waitFor({ timeout: 30000 });
                 console.log('Applicant registration reaches the Chiro Auth registration form.');
                 await page.screenshot({ path: 'chiro-auth-registration.png', fullPage: true });
+              } else {
+                await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+                await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
+                await page.locator('#username').waitFor({ timeout: 30000 });
+                console.log('Applicant sign-in link also opens Chiro Auth automatically.');
               }
               if (errors.length) throw new Error(errors.join('\n'));
               console.log('No JavaScript runtime errors.');

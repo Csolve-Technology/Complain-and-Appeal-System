@@ -48,7 +48,7 @@ export async function accessToken() {
   }
 }
 
-export function initializeSso() {
+export function initializeSso(options: { requireLogin?: boolean; skipSessionCheck?: boolean } = {}) {
   if (!keycloak) throw new Error("Chiro Auth is not configured.");
   keycloak.onAuthLogout = () =>
     window.dispatchEvent(new Event("cas:session-ended"));
@@ -59,7 +59,7 @@ export function initializeSso() {
     void accessToken().catch(() => undefined);
   };
   initialization ??= keycloak.init({
-    onLoad: "check-sso",
+    onLoad: options.skipSessionCheck ? undefined : options.requireLogin ? "login-required" : "check-sso",
     pkceMethod: "S256",
     flow: "standard",
     checkLoginIframe: false,

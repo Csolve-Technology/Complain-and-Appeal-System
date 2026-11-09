@@ -47,6 +47,24 @@ test('SSO initialization is shared, requires PKCE and removes legacy persisted c
   assert.equal(calls[0][1].onLoad, 'check-sso');
   assert.equal(storage.size, 0);
 });
+
+test('normal app entry requires Keycloak login directly with the same PKCE callback', async () => {
+  const {auth,instances}=session();auth.configureAuth(settings);
+  await auth.initializeSso({requireLogin:true});
+  const options=instances[0].calls.find(c=>c[0]==='init')[1];
+  assert.equal(options.onLoad,'login-required');
+  assert.equal(options.pkceMethod,'S256');
+  assert.equal(options.flow,'standard');
+  assert.equal(options.redirectUri,'https://cas.chirocity.gov.et/login');
+});
+
+test('public applicant registration does not redirect its session check to the login callback', async () => {
+  const {auth,instances}=session();auth.configureAuth(settings);
+  await auth.initializeSso({requireLogin:false,skipSessionCheck:true});
+  assert.equal(instances[0].calls.find(c=>c[0]==='init')[1].onLoad,undefined);
+  await auth.signUp();
+  assert.ok(instances[0].calls.some(c=>c[0]==='register'));
+});
 test('API requests refresh the in-memory token without persisting it', async () => {
   const { auth, instances, storage } = session(); auth.configureAuth(settings);
   assert.equal(await auth.accessToken(), 'memory-only-token');

@@ -29,7 +29,9 @@ Run **Verify live CAS browser login** after activation. It verifies rendering an
 
 ## Applicant self-registration
 
-CAS login includes **Sign up as an applicant**, which opens a CAS introduction page and then the Keycloak registration flow with PKCE and the existing `/login` callback. No local password account or privileged role is created by the browser.
+CAS opens Keycloak login automatically from `/`, `/login`, `/auth/sign-in` and protected pages when no session exists. Existing Chiro Auth sessions enter CAS without another password prompt. The app sign-in screen remains only for recovery after a sign-in or authorization error.
+
+Applicant registration remains public at `/auth/sign-up`. This introduction page opens Keycloak registration with PKCE and the existing `/login` callback. Users can also use the Register link on the Keycloak login page when realm registration is enabled. No local password account or privileged role is created by the browser.
 
 Enable **Realm settings > Login > User registration** in the `chirocity` realm. Configure SMTP and email verification for applicants. Each applicant must receive `cas-api > CITIZEN` for own-case access. Assign it manually after review, or map it to a `CAS Applicants` group and make that a default group if all new realm users should automatically receive applicant access. A default group applies to all newly created users in this shared realm; it is not restricted to the CAS registration link. Staff roles must remain explicitly assigned.
 
@@ -38,3 +40,9 @@ Enable **Realm settings > Login > User registration** in the `chirocity` realm. 
 `CAS_REQUIRE_VERIFIED_EMAIL=true` is the default. Set it to `false` in the VPS `.env` and recreate only `cas-api` to allow CAS applicants to sign in without confirming their email. This does not mark the email verified in Keycloak, relax token issuer/signature/audience/client checks, allow unknown CAS roles, or automatically link existing email accounts. The signup instructions follow the runtime policy. Other applications retain their own verification requirements.
 
 Keycloak can still require verification before issuing a token. To allow login without confirmation, its Verify email switch and any applicant Verify Email required action must also permit this. Realm-wide settings affect the shared realm; they do not change other applications' server-side requirements.
+
+## Automatic login configuration
+
+No Keycloak changes are required for automatic login. Keep `cas-web` public, Standard Flow enabled, PKCE S256, the existing production/local `/login` redirect and post logout URIs, and their web origins. Keep the `cas-api` audience mapper and role grants. The change uses the existing Authorization Code flow. Deploy the updated frontend through the normal CAS deployment workflow; no database migration or identity relinking is needed.
+
+For local Django development, install `api/requirements.txt` and put `AUTH_MODE=keycloak` and the server-only provisioner settings in the ignored `api/.env`. Django loads this file without overriding environment variables already set by the terminal or Docker. Use `FRONTEND_BASE_URL=http://localhost:3000` locally. Restart Django after environment-file changes, then reload the frontend. `/api/auth/config/` must report `mode: keycloak`; `mode: local` intentionally retains the legacy login form. Production Docker continues to use the root `.env` through Compose.
