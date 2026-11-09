@@ -793,11 +793,11 @@ export default function UsersPage() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {mode === "keycloak" && <div className="space-y-2">
             <label htmlFor="new-user-password">Initial temporary password *</label>
-            <Input id="new-user-password" type="password" autoComplete="new-password" required minLength={8}
+            <Input id="new-user-password" type="password" autoComplete="new-password" required minLength={6}
               value={temporaryPassword} aria-invalid={Boolean(fieldErrors.password)} aria-describedby="new-user-password-help new-user-password-error"
               className={fieldErrors.password ? "border-red-500" : ""}
               onChange={e => { setTemporaryPassword(e.target.value); setFieldErrors(previous => { const next = {...previous}; delete next.password; return next; }); }} />
-            <p id="new-user-password-help" className="text-sm text-gray-500">Use at least 8 characters. Avoid common or entirely numeric passwords. The user must change this password at first sign-in.</p>
+            <p id="new-user-password-help" className="text-sm text-gray-500">Use at least 6 characters. No uppercase, number, or other strength requirements. The user must change this password at first sign-in.</p>
             {fieldErrors.password && <p id="new-user-password-error" role="alert" className="text-sm text-red-600">{fieldErrors.password}</p>}
           </div>}
             <div>

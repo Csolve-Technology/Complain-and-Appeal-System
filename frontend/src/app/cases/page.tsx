@@ -963,11 +963,11 @@ export default function ComplaintAppealPage() {
         >
           {mode === "keycloak" && <div className="space-y-2">
             <label htmlFor="case-user-password">Initial temporary password *</label>
-            <Input id="case-user-password" type="password" autoComplete="new-password" required minLength={8}
+            <Input id="case-user-password" type="password" autoComplete="new-password" required minLength={6}
               value={temporaryPassword} aria-invalid={Boolean(userFieldErrors.password)} aria-describedby="case-user-password-help case-user-password-error"
               className={userFieldErrors.password ? "border-red-500" : ""}
               onChange={e => { setTemporaryPassword(e.target.value); setUserFieldErrors(previous => { const next = {...previous}; delete next.password; return next; }); }} />
-            <p id="case-user-password-help" className="text-sm text-gray-500">Use at least 8 characters. Avoid common or entirely numeric passwords. The user must change this password at first sign-in.</p>
+            <p id="case-user-password-help" className="text-sm text-gray-500">Use at least 6 characters. No uppercase, number, or other strength requirements. The user must change this password at first sign-in.</p>
             {userFieldErrors.password && <p id="case-user-password-error" role="alert" className="text-sm text-red-600">{userFieldErrors.password}</p>}
           </div>}
           {/* General error message at top */}

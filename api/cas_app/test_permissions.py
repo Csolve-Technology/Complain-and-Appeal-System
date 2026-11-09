@@ -78,6 +78,35 @@ class PermissionTests(TestCase):
         user=get_user_model().objects.get(username="new")
         self.assertFalse(user.has_usable_password()); self.assertEqual(user.keycloak_sub,"new-keycloak-subject")
         self.assertNotIn("password",response.data)
+    def test_six_character_numeric_password_is_accepted_without_strength_validation(self):
+        self.user.groups.set([Group.objects.get(name="Admin")])
+        with patch("cas_app.identity_management.KeycloakAdmin") as cls:
+            manager = cls.return_value
+            manager.create.return_value = "six-character-subject"
+            manager.replace_roles.return_value = ["CITIZEN"]
+            result = self.client.post("/api/users/", {"username":"six-character", "email":"six@example.com", "password":"123456", "groups":["Citizen"]}, format="json")
+            self.assertEqual(result.status_code, 201, result.data)
+            self.assertEqual(manager.create.call_args.args[1], "123456")
+            self.assertFalse(get_user_model().objects.get(username="six-character").has_usable_password())
+
+    def test_fewer_than_six_characters_are_rejected_before_provisioning(self):
+        self.user.groups.set([Group.objects.get(name="Admin")])
+        with patch("cas_app.identity_management.KeycloakAdmin") as cls:
+            result = self.client.post("/api/users/", {"username":"too-short", "email":"short@example.com", "password":"12345", "groups":["Citizen"]}, format="json")
+            self.assertEqual(result.status_code, 400)
+            self.assertIn("password", result.data)
+            cls.assert_not_called()
+
+    def test_common_six_character_password_is_accepted(self):
+        self.user.groups.set([Group.objects.get(name="Admin")])
+        with patch("cas_app.identity_management.KeycloakAdmin") as cls:
+            manager = cls.return_value
+            manager.create.return_value = "common-password-subject"
+            manager.replace_roles.return_value = ["CITIZEN"]
+            result = self.client.post("/api/users/", {"username":"common-password", "email":"common@example.com", "password":"aaaaaa", "groups":["Citizen"]}, format="json")
+            self.assertEqual(result.status_code, 201, result.data)
+            self.assertEqual(manager.create.call_args.args[1], "aaaaaa")
+
     def test_remote_role_failure_cleans_up_disabled_identity(self):
         self.user.groups.set([Group.objects.get(name="Admin")])
         with patch("cas_app.identity_management.KeycloakAdmin") as cls:

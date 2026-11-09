@@ -95,14 +95,8 @@ function LocalSignUpPage() {
     if (!form.password) {
       errors.password = "Password is required";
       hasErrors = true;
-    } else if (form.password.length < 8) {
-      errors.password = "Password must be at least 8 characters long";
-      hasErrors = true;
-    } else if (!/(?=.*[a-z])(?=.*[A-Z])/.test(form.password)) {
-      errors.password = "Password must contain both uppercase and lowercase letters";
-      hasErrors = true;
-    } else if (!/(?=.*[0-9])/.test(form.password)) {
-      errors.password = "Password must contain at least one number";
+    } else if (form.password.length < 6) {
+      errors.password = "Password must be at least 6 characters long";
       hasErrors = true;
     }
 
@@ -488,7 +482,7 @@ function LocalSignUpPage() {
                   )}
                   {!fieldErrors.password && form.password && (
                     <p className="mt-1 text-xs text-gray-500 dark:text-dark-6">
-                      Must be at least 8 characters with uppercase, lowercase, and a number
+                      Must be at least 6 characters
                     </p>
                   )}
                 </div>

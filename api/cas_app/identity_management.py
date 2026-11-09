@@ -36,11 +36,8 @@ def create_user(actor, serializer):
     if not email: raise ValidationError({"email":"Email is required for Chiro Auth accounts."})
     password = values.pop("password", None)
     if not password: raise ValidationError({"password":"Enter an initial temporary password for this Chiro Auth account."})
-    from django.contrib.auth.password_validation import validate_password
-    from django.core.exceptions import ValidationError as DjangoValidationError
-    try: validate_password(password)
-    except DjangoValidationError as error: raise ValidationError({"password":error.messages}) from error
     manager = KeycloakAdmin()
+    manager.ensure_roles([remote_name(group) for group in values["groups"]])
     subject = manager.create({"username":values["username"],"email":email,"emailVerified":True,"enabled":False,"firstName":values.get("first_name", ""),"lastName":values.get("last_name", ""),"requiredActions":["UPDATE_PASSWORD"]}, password)
     try:
         effective = manager.replace_roles(subject, [remote_name(g) for g in values["groups"]])
