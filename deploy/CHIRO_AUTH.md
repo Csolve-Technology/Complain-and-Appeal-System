@@ -1,6 +1,21 @@
 # CAS centralized sign-in
 
-Realm: `chirocity` at `https://auth.chirocity.gov.et`.
+Realm: set `KEYCLOAK_REALM=chiro-public` for the separate public CAS realm at `https://auth.chirocity.gov.et`. Older installations may still use `chirocity`; changing this setting requires explicit migration of existing account links.
+
+## Moving an existing account to another realm
+
+Recreate the CAS clients, audience mapper, roles, provisioner permissions, redirect URIs and web origins in the target realm. Set `KEYCLOAK_REALM` and the target realm provisioner secret in the ignored environment file (`api/.env` locally, root `.env` for Docker). Restart Django or recreate the API container so it reads these settings.
+
+Verify the target user's ID, email, enabled status and CAS client roles before linking. The management command rejects replacement of an existing identity unless both its expected previous subject and issuer are supplied. For the approved CAS administrator migration, run after deploying the updated command:
+
+```sh
+export LINK_EMAIL=cas@chirocity.gov.et
+export KEYCLOAK_SUB=fa442fe7-ffff-4d8f-833f-217c57ace706
+CAS_DATA_DIR=/srv/cas docker compose --env-file .env -f docker-compose.yml -f docker-compose.domains.yml exec -T -e LINK_EMAIL -e KEYCLOAK_SUB cas-api python manage.py link_chiro_user --previous-subject aa66d67e-d962-4424-ba47-3b7061392e5c --previous-issuer https://auth.chirocity.gov.et/realms/chirocity
+unset LINK_EMAIL KEYCLOAK_SUB
+```
+
+This preserves the local account ID and its case/history relationships. Other existing accounts need their own verified migration; they are never matched automatically by email. Sign out and sign in again after switching realms. Keep the old realm until the remaining accounts are migrated. Provisioner credentials belong only in server environment files.
 
 - Public OIDC client: `cas-web`, client authentication OFF, standard flow ON, PKCE S256.
 - Valid redirect and post logout redirect: `https://cas.chirocity.gov.et/login`.
