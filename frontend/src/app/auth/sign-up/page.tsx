@@ -1,7 +1,6 @@
 "use client";
 
 import { authFetch } from "@/services/auth-http";
-import { AuthPageShell } from "@/components/Auth/AuthPageShell";
 import { useChiroAuth } from "@/components/ChiroAuthProvider";
 import { useState } from "react";
 import Link from "next/link";
@@ -12,6 +11,7 @@ import { Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { SuccessModal } from "@/components/ui/success-modal";
 
 function LocalSignUpPage() {
+  const centralAuth = useChiroAuth().mode === 'keycloak';
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const router = useRouter();
   const [form, setForm] = useState({
@@ -86,7 +86,7 @@ function LocalSignUpPage() {
     }
 
     // Email validation (optional but must be valid if provided)
-    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+    if ((centralAuth && !form.email.trim()) || (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))) {
       errors.email = "Please enter a valid email address";
       hasErrors = true;
     }
@@ -160,9 +160,11 @@ function LocalSignUpPage() {
         payload.address = form.address.trim();
       }
 
-      console.log("Sign-up payload:", payload); // Debug log
-
-      const res = await authFetch(`${API_URL}/users/`, {
+      if (centralAuth) {
+        delete payload.groups;
+        delete payload.status;
+      }
+      const res = await (centralAuth ? fetch : authFetch)(`${API_URL}/${centralAuth ? 'auth/applicant-registration/' : 'users/'}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -338,7 +340,7 @@ function LocalSignUpPage() {
   return (
     <div>
       <div className="flex min-h-screen items-center justify-center bg-gray-2 p-4 dark:bg-[#020d1a]">
-        <div className="w-full max-w-2xl rounded-[10px] bg-white shadow-1 dark:bg-gray-dark dark:shadow-card">
+        <div data-testid="cas-auth-card" className="w-full max-w-2xl rounded-[10px] bg-white shadow-1 dark:bg-gray-dark dark:shadow-card">
           {/* Form Section - Centered */}
           <section className="w-full p-5 sm:p-10">
             <div className="mx-auto w-full max-w-md">
@@ -397,7 +399,7 @@ function LocalSignUpPage() {
                     <InputGroup
                       type="email"
                       label="Email"
-                      placeholder="Enter your email (optional)"
+                      placeholder={centralAuth ? 'Enter your email' : 'Enter your email (optional)'}
                       name="email"
                       value={form.email}
                       onChange={handleChange}
@@ -570,16 +572,5 @@ function LocalSignUpPage() {
 
 
 export default function SignUpPage() {
-  const auth = useChiroAuth();
-  const [failure, setFailure] = useState<string | null>(null);
-  if (auth.mode !== "keycloak") return <LocalSignUpPage />;
-  return <AuthPageShell title="Sign up as an applicant" subtitle="Create your Chiro Auth account to submit complaints and appeals.">
-    <div className="space-y-5">
-      <p className="text-sm leading-6 text-dark-5 dark:text-dark-6">Your account lets you track your own cases, receive responses, and submit feedback.</p>
-      {failure && <p role="alert" className="text-sm text-red-600">{failure}</p>}
-      <button className="w-full rounded-lg bg-primary p-4 font-medium text-white" onClick={() => void auth.signUp().catch(error => setFailure(error.message))}>Create applicant account</button>
-      <p className="text-sm leading-6 text-dark-5 dark:text-dark-6">{auth.requireVerifiedEmail ? "After registration, verify your email to finish setting up your account." : "After registration, sign in to start submitting and tracking your cases."} Already use another city service? You can sign in with the same Chiro Auth account.</p>
-      <p className="text-sm">Already have an account? <Link href="/login" className="font-semibold text-primary underline-offset-4 hover:underline">Sign in</Link></p>
-    </div>
-  </AuthPageShell>;
+  return <LocalSignUpPage />;
 }

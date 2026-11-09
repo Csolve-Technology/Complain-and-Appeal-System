@@ -129,7 +129,7 @@ class KeycloakAdmin:
 
     def user_path(self, subject): return self.api + "/users/" + quote(subject, safe="")
 
-    def create(self, data, password=None):
+    def create(self, data, password=None, *, temporary=True):
         created = self.request("POST", self.api + "/users", data)
         location = created.get("_location") if isinstance(created, dict) else None
         if location:
@@ -142,7 +142,7 @@ class KeycloakAdmin:
             subject = matches[0]["id"]
         try:
             if password:
-                self.request("PUT", self.user_path(subject) + "/reset-password", {"type":"password", "value":password,"temporary":True})
+                self.request("PUT", self.user_path(subject) + "/reset-password", {"type":"password", "value":password,"temporary":temporary})
             return subject
         except Exception:
             self.delete(subject)

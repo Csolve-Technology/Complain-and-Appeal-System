@@ -43,7 +43,7 @@ jobs:
               if (!authorizationUrl || authorizationUrl.searchParams.get('code_challenge_method') !== 'S256' || authorizationUrl.searchParams.get('redirect_uri') !== 'https://cas.chirocity.gov.et/login') throw new Error('Expected cas-web with PKCE S256 and the CAS login callback');
               await page.screenshot({ path: 'chiro-auth-login.png' });
               await page.goto('https://cas.chirocity.gov.et/auth/sign-up', { waitUntil: 'domcontentloaded', timeout: 60000 });
-              const registration = page.getByRole('button', { name: 'Create applicant account' });
+              const registration = page.getByRole('button', { name: 'Create Account', exact: true });
               await registration.waitFor({ timeout: 30000 });
               for (const viewport of [{ width: 1920, height: 1080 }, { width: 768, height: 1024 }, { width: 375, height: 812 }]) {
                 await page.setViewportSize(viewport);
@@ -52,18 +52,10 @@ jobs:
                 if (overflow || !bounds || bounds.x < 0 || bounds.x + bounds.width > viewport.width + 1 || bounds.y < 0) throw new Error('Cropped registration layout at '+JSON.stringify(viewport));
                 await page.screenshot({ path: `cas-applicant-signup-${viewport.width}.png`, fullPage: true });
               }
-              if (process.env.VERIFY_REGISTRATION === 'true') {
-                await registration.click();
-                await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
-                await page.locator('#kc-register-form').waitFor({ timeout: 30000 });
-                console.log('Applicant registration reaches the Chiro Auth registration form.');
-                await page.screenshot({ path: 'chiro-auth-registration.png', fullPage: true });
-              } else {
-                await page.getByRole('link', { name: 'Sign in', exact: true }).click();
-                await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
-                await page.locator('#username').waitFor({ timeout: 30000 });
-                console.log('Applicant sign-in link also opens Chiro Auth automatically.');
-              }
+              await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+              await page.waitForURL('https://auth.chirocity.gov.et/**', { timeout: 30000 });
+              await page.locator('#username').waitFor({ timeout: 30000 });
+              console.log('App signup form is public; sign-in opens Chiro Auth. No applicant was created by this check.');
               if (errors.length) throw new Error(errors.join('\n'));
               console.log('No JavaScript runtime errors.');
             } catch (error) {

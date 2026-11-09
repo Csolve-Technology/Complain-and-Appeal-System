@@ -46,9 +46,9 @@ Run **Verify live CAS browser login** after activation. It verifies rendering an
 
 CAS opens Keycloak login automatically from `/`, `/login`, `/auth/sign-in` and protected pages when no session exists. Existing Chiro Auth sessions enter CAS without another password prompt. The app sign-in screen remains only for recovery after a sign-in or authorization error.
 
-Applicant registration remains public at `/auth/sign-up`. This introduction page opens Keycloak registration with PKCE and the existing `/login` callback. Users can also use the Register link on the Keycloak login page when realm registration is enabled. No local password account or privileged role is created by the browser.
+Applicant registration is public at `/auth/sign-up`. The app form calls `/api/auth/applicant-registration/`; the backend creates a verified Keycloak identity with only `cas-api/CITIZEN` and a linked CAS profile. It does not issue tokens or accept browser-supplied roles. After signup the user signs in through Keycloak. The shared theme routes the cas-web Register link directly to this form.
 
-Enable **Realm settings > Login > User registration** in the `chirocity` realm. Configure SMTP and email verification for applicants. Each applicant must receive `cas-api > CITIZEN` for own-case access. Assign it manually after review, or map it to a `CAS Applicants` group and make that a default group if all new realm users should automatically receive applicant access. A default group applies to all newly created users in this shared realm; it is not restricted to the CAS registration link. Staff roles must remain explicitly assigned.
+Keep realm registration enabled so the theme displays Register. Do not use realm-wide CAS or CLMS applicant default groups: those grant access across app registration paths. Each app assigns only its own client role. Existing users of the shared realm need explicit app access; email alone never links existing CAS accounts. Deploy the CAS backend/frontend before deploying the updated Keycloak theme.
 
 ## Optional email confirmation
 
