@@ -58,6 +58,15 @@ test('normal app entry requires Keycloak login directly with the same PKCE callb
   assert.equal(options.redirectUri,'https://cas.chirocity.gov.et/login');
 });
 
+test('a newly registered applicant opens central login with their email and a fresh login prompt', async () => {
+  const {auth,instances}=session();auth.configureAuth(settings);
+  await auth.signIn({loginHint:'applicant@example.invalid',prompt:'login'});
+  const options=instances[0].calls.find(call=>call[0]==='login')[1];
+  assert.equal(options.redirectUri,'https://cas.chirocity.gov.et/login');
+  assert.equal(options.loginHint,'applicant@example.invalid');
+  assert.equal(options.prompt,'login');
+});
+
 test('public applicant registration does not redirect its session check to the login callback', async () => {
   const {auth,instances}=session();auth.configureAuth(settings);
   await auth.initializeSso({requireLogin:false,skipSessionCheck:true});

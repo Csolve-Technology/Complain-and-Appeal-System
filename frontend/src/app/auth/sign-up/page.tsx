@@ -2,6 +2,7 @@
 
 import { authFetch } from "@/services/auth-http";
 import { useChiroAuth } from "@/components/ChiroAuthProvider";
+import { signIn } from '@/services/auth-session';
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
@@ -30,6 +31,18 @@ function LocalSignUpPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
+  const [openingAuth, setOpeningAuth] = useState(false);
+
+  const openApplicantLogin = async (email: string) => {
+    setOpeningAuth(true);
+    try {
+      await signIn({ loginHint: email, prompt: 'login' });
+    } catch {
+      setOpeningAuth(false);
+      setError('Your account was created, but Chiro Auth could not open. Please try signing in again.');
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -319,7 +332,14 @@ function LocalSignUpPage() {
         return;
       }
 
-      // Show success modal
+      if (centralAuth) {
+        const email = form.email.trim();
+        setRegisteredEmail(email);
+        await openApplicantLogin(email);
+        return;
+      }
+
+      // Local authentication retains its existing success confirmation.
       setShowSuccessModal(true);
       
       // Clear form
@@ -336,6 +356,15 @@ function LocalSignUpPage() {
     setShowSuccessModal(false);
     router.push("/auth/sign-in");
   };
+
+  if (openingAuth) return <main role="status" className="flex min-h-screen items-center justify-center">Account created. Opening Chiro Auth...</main>;
+  if (centralAuth && registeredEmail) return <main className="flex min-h-screen items-center justify-center p-6">
+    <section className="w-full max-w-md space-y-4 rounded-xl border bg-white p-6 dark:bg-gray-dark">
+      <h1 className="text-xl font-semibold">Your applicant account is ready</h1>
+      {error && <p role="alert">{error}</p>}
+      <button className="rounded-lg bg-primary px-4 py-3 text-white" onClick={() => void openApplicantLogin(registeredEmail)}>Continue to Chiro Auth</button>
+    </section>
+  </main>;
 
   return (
     <div>

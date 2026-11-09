@@ -47,7 +47,7 @@ Run **Verify live CAS browser login** after activation. It verifies rendering an
 
 CAS opens Keycloak login automatically from `/`, `/login`, `/auth/sign-in` and protected pages when no session exists. Existing Chiro Auth sessions enter CAS without another password prompt. The app sign-in screen remains only for recovery after a sign-in or authorization error.
 
-Applicant registration is public at `/auth/sign-up`. The app form calls `/api/auth/applicant-registration/`; the backend creates a verified Keycloak identity with only `cas-api/CITIZEN` and a linked CAS profile. It does not issue tokens or accept browser-supplied roles. After signup the user signs in through Keycloak. The shared theme routes the cas-web Register link directly to this form.
+Applicant registration is public at `/auth/sign-up`. The app form calls `/api/auth/applicant-registration/`; the backend creates a verified Keycloak identity with only `cas-api/CITIZEN` and a linked CAS profile. It does not issue tokens or accept browser-supplied roles. Successful signup opens Keycloak directly with the applicant's email prefilled and a fresh login prompt; the old CAS sign-in page is skipped. The shared theme routes the cas-web Register link directly to this form.
 
 Keep realm registration enabled so the theme displays Register. Do not use realm-wide CAS or CLMS applicant default groups: those grant access across app registration paths. Each app assigns only its own client role. Existing users of the shared realm need explicit app access; email alone never links existing CAS accounts. Deploy the CAS backend/frontend before deploying the updated Keycloak theme.
 

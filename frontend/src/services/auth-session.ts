@@ -69,9 +69,9 @@ export function initializeSso(options: { requireLogin?: boolean; skipSessionChec
   return initialization;
 }
 
-export async function signIn() {
+export async function signIn(options: { loginHint?: string; prompt?: 'login' } = {}) {
   if (!keycloak) throw new Error("Chiro Auth is not configured.");
-  await keycloak.login({ redirectUri: `${window.location.origin}/login` });
+  await keycloak.login({ redirectUri: `${window.location.origin}/login`, ...options });
 }
 
 export async function signUp() {
