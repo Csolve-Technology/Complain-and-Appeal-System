@@ -1,3 +1,4 @@
+from .identity_lifecycle import assert_active
 """Chiro Auth access-token verification and explicit local identity linkage."""
 from functools import lru_cache
 from urllib.parse import urlparse
@@ -50,6 +51,7 @@ def resolve_user(payload):
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject or len(subject) > 255:
         raise AuthenticationFailed("Invalid Chiro Auth identity.")
+    assert_active(subject)
     resources = payload.get("resource_access", {})
     client = resources.get(settings.KEYCLOAK_AUDIENCE, {}) if isinstance(resources, dict) else {}
     roles = client.get("roles", []) if isinstance(client, dict) else []

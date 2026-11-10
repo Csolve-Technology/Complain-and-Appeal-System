@@ -65,7 +65,7 @@ class KeycloakAdmin:
         if len(matches) != 1: raise ManagementUnavailable()
         self.client_id = matches[0]["id"]
 
-    def request(self, method, path, data=None, form=None):
+    def request(self, method, path, data=None, form=None, missing_ok=False):
         headers = {"Accept":"application/json"}
         if hasattr(self, "token"): headers["Authorization"] = "Bearer " + self.token
         body = None
@@ -83,6 +83,7 @@ class KeycloakAdmin:
                         return {"_location": response.headers["Location"]}
                     return None
             except HTTPError as error:
+                if error.code == 404 and missing_ok: return None
                 if error.code == 409: raise ValidationError({"email":"An account or role already exists in Chiro Auth. Link an existing identity explicitly rather than creating a duplicate."}) from error
                 if error.code == 400:
                     field = "password" if path.endswith("/reset-password") else "detail"

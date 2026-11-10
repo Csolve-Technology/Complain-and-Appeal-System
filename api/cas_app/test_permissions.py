@@ -1,3 +1,13 @@
+from unittest.mock import patch as _lifecycle_patch
+from django.test import TestCase as _LifecycleTestCase
+class _IsolatedIdentityStatus(_LifecycleTestCase):
+    def setUp(self):
+        super().setUp()
+        for target, replacement in [('cas_app.identity_management.set_enabled', lambda *args: None), ('cas_app.api.visible_users', lambda qs: qs), ('cas_app.api.delete_identity', lambda *args: None), ('cas_app.chiro_auth.assert_active', lambda subject: None), ('cas_app.identity_lifecycle.visible_users', lambda qs: qs), ('cas_app.identity_lifecycle.set_enabled', lambda *args: None), ('cas_app.identity_lifecycle.delete_identity', lambda *args: None)]:
+            stub = _lifecycle_patch(target, replacement)
+            stub.start()
+            self.addCleanup(stub.stop)
+
 from unittest.mock import patch, Mock
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -10,10 +20,11 @@ from .models import Case, Office
 from .keycloak_admin import KeycloakAdmin, ManagementUnavailable
 
 @override_settings(AUTH_MODE="keycloak", ALLOWED_HOSTS=["testserver"])
-class PermissionTests(TestCase):
+class PermissionTests(_IsolatedIdentityStatus):
     @classmethod
     def setUpTestData(cls): call_command("bootstrap_admin", verbosity=0)
     def setUp(self):
+        super().setUp()
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(username="tester", email="tester@example.com")
         self.group = Group.objects.create(name="Custom reviewer")
@@ -187,7 +198,7 @@ class PermissionTests(TestCase):
         self.assertNotIn("email",match);self.assertNotIn("national_id",match)
 
 
-class ManagementRoleTests(TestCase):
+class ManagementRoleTests(_IsolatedIdentityStatus):
     def manager(self):
         manager=KeycloakAdmin.__new__(KeycloakAdmin)
         manager.api="/admin/realms/chirocity";manager.client_id="cas-id"

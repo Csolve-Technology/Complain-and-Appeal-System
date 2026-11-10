@@ -1,3 +1,4 @@
+from .identity_lifecycle import set_enabled
 """Provision identities first, then activate only after the CAS profile is saved."""
 import math
 from django.conf import settings
@@ -54,6 +55,14 @@ def update_user(actor, serializer):
     values, user = serializer.validated_data, serializer.instance
     if {"password", "username", "email"}.intersection(values):
         raise PermissionDenied("Manage usernames, emails and passwords in Chiro Auth.")
+    if "status" in values:
+        enabled = values['status'] == 'active'
+        if not enabled and user.pk == actor.pk: raise PermissionDenied('You cannot deactivate yourself.')
+        User = type(user)
+        if not enabled and user.groups.filter(name='Admin').exists() and not User.objects.filter(groups__name='Admin', is_active=True, status='active', is_deleted=False).exclude(pk=user.pk).exists():
+            raise PermissionDenied('Keep at least one active administrator.')
+        set_enabled(user, enabled)
+        values['is_active'] = enabled
     if "groups" not in values:
         serializer.save(status_changed_by=actor); return
     if not user.keycloak_sub or user.keycloak_issuer != issuer():

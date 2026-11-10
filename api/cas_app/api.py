@@ -1,3 +1,4 @@
+from .identity_lifecycle import visible_users, delete_identity
 from django.conf import settings
 from rest_framework.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
@@ -67,7 +68,7 @@ class UserViewSet(PermissionMixin, viewsets.ModelViewSet):
         return context
 
     def get_queryset(self):
-        qs = super().get_queryset().filter(is_deleted=False).exclude(status="deleted")
+        qs = visible_users(super().get_queryset().filter(is_deleted=False).exclude(status="deleted"))
         if can(self.request.user, "cas_app.view_user") or can(self.request.user, "cas_app.change_user"):
             if self.request.user.groups.filter(name="Focal Person").exists():
                 return qs.filter(office=self.request.user.office) if self.request.user.office_id else qs.filter(pk=self.request.user.pk)
@@ -104,9 +105,17 @@ class UserViewSet(PermissionMixin, viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         # Only admins can destroy (permission enforced in get_permissions)
         instance = self.get_object()
+        if instance.pk == request.user.pk:
+            raise PermissionDenied('You cannot delete yourself.')
+        check_grants(request.user, [], instance.groups.all())
+        if instance.groups.filter(name='Admin').exists() and not User.objects.filter(groups__name='Admin', is_active=True, status='active', is_deleted=False).exclude(pk=instance.pk).exists():
+            raise PermissionDenied('Keep at least one active administrator.')
+        if settings.AUTH_MODE == 'keycloak': delete_identity(instance)
+        instance.is_active = False
+        instance.is_deleted = True
         instance.deleted_by = request.user
         instance.status = "deleted"
-        instance.save(update_fields=["deleted_by", "status"])
+        instance.save(update_fields=["deleted_by", "status", "is_active", "is_deleted"])
         return Response({"message": "User marked as deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
 
 

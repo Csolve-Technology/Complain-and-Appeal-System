@@ -1,3 +1,13 @@
+from unittest.mock import patch as _lifecycle_patch
+from django.test import TestCase as _LifecycleTestCase
+class _IsolatedIdentityStatus(_LifecycleTestCase):
+    def setUp(self):
+        super().setUp()
+        for target, replacement in [('cas_app.identity_management.set_enabled', lambda *args: None), ('cas_app.api.visible_users', lambda qs: qs), ('cas_app.api.delete_identity', lambda *args: None), ('cas_app.chiro_auth.assert_active', lambda subject: None), ('cas_app.identity_lifecycle.visible_users', lambda qs: qs), ('cas_app.identity_lifecycle.set_enabled', lambda *args: None), ('cas_app.identity_lifecycle.delete_identity', lambda *args: None)]:
+            stub = _lifecycle_patch(target, replacement)
+            stub.start()
+            self.addCleanup(stub.stop)
+
 import json
 import threading
 import time
@@ -14,7 +24,7 @@ from .chiro_auth import jwks_client
 from .models import Case, Office
 
 @override_settings(CAS_REQUIRE_VERIFIED_EMAIL=True, AUTH_MODE="keycloak", ALLOWED_HOSTS=["testserver"], KEYCLOAK_REALM="chirocity", KEYCLOAK_CLIENT_ID="cas-web", KEYCLOAK_AUDIENCE="cas-api")
-class ChiroAuthTests(TestCase):
+class ChiroAuthTests(_IsolatedIdentityStatus):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -38,7 +48,9 @@ class ChiroAuthTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         call_command("bootstrap_admin", verbosity=0)
-    def setUp(self): self.client = APIClient()
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
     def claims(self):
         return dict(sub="verified-subject", iss=self.issuer, aud="cas-api", iat=int(time.time()), exp=int(time.time())+300, typ="Bearer", azp="cas-web", email="citizen@example.com", email_verified=True, given_name="CAS", family_name="User", resource_access={"cas-api": {"roles": ["CITIZEN"]}})
     def token(self, **changes):
