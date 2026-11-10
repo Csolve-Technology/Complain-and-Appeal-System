@@ -37,5 +37,15 @@ const assert = require('node:assert/strict');
     assert.equal(created, 1);
     assert.equal(loginNavigations, 0);
     console.log('Successful applicant signup opens Keycloak directly with a fresh login prompt; no middle sign-in page.');
+    await page.goto(origin + '/auth/sign-up', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+    await page.waitForURL('https://auth.chirocity.gov.et/realms/cas/**', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const existingLogin = new URL(page.url());
+    assert.equal(existingLogin.searchParams.get('client_id'), 'cas-web');
+    assert.equal(existingLogin.searchParams.get('redirect_uri'), origin + '/login');
+    assert.equal(existingLogin.searchParams.get('code_challenge_method'), 'S256');
+    assert.equal(created, 1);
+    assert.equal(loginNavigations, 0);
+    console.log('Existing-account Sign in opens Keycloak directly without registering or visiting the middle sign-in page.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

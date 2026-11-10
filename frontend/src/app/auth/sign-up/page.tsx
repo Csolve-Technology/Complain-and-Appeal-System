@@ -357,7 +357,7 @@ function LocalSignUpPage() {
     router.push("/auth/sign-in");
   };
 
-  if (openingAuth) return <main role="status" className="flex min-h-screen items-center justify-center">Account created. Opening Chiro Auth...</main>;
+  if (openingAuth) return <main role="status" className="flex min-h-screen items-center justify-center">Opening Chiro Auth...</main>;
   if (centralAuth && registeredEmail) return <main className="flex min-h-screen items-center justify-center p-6">
     <section className="w-full max-w-md space-y-4 rounded-xl border bg-white p-6 dark:bg-gray-dark">
       <h1 className="text-xl font-semibold">Your applicant account is ready</h1>
@@ -575,7 +575,16 @@ function LocalSignUpPage() {
                 {/* Sign in link */}
                 <div className="mt-4 text-center text-sm">
                   <span className="text-gray-600 dark:text-dark-6">Already have an account? </span>
-                  <Link href="/auth/sign-in" className="font-medium text-primary hover:opacity-90">
+                  <Link href={centralAuth ? "/login" : "/auth/sign-in"}
+                    onClick={centralAuth ? (event) => {
+                      event.preventDefault();
+                      setOpeningAuth(true);
+                      void signIn().catch(() => {
+                        setOpeningAuth(false);
+                        setError('Unable to open Chiro Auth. Please try signing in again.');
+                      });
+                    } : undefined}
+                    className="font-medium text-primary hover:opacity-90">
                     Sign in
                   </Link>
                 </div>
