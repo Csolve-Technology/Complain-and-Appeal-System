@@ -58,3 +58,36 @@ class LifecycleTests(TestCase):
         with patch('cas_app.chiro_auth.assert_active',side_effect=AuthenticationFailed('Deleted')) as check:
             with self.assertRaises(AuthenticationFailed): resolve_user({'sub':'subject'})
             check.assert_called_once_with('subject')
+
+    def test_deleted_link_is_hidden_but_unlinked_profile_is_retained(self):
+        User = get_user_model()
+        alive = User.objects.create_user(username='alive', email='alive@example.invalid')
+        deleted = User.objects.create_user(username='gone', email='gone@example.invalid')
+        unlinked = User.objects.create_user(username='legacy', email='legacy@example.invalid')
+        User.objects.filter(pk=alive.pk).update(keycloak_sub='alive-sub',keycloak_issuer=life.issuer())
+        User.objects.filter(pk=deleted.pk).update(keycloak_sub='gone-sub',keycloak_issuer=life.issuer())
+        self.admin.request.return_value = [{'id':'alive-sub'}]
+        visible = set(life.visible_users(User.objects.all()).values_list('pk',flat=True))
+        self.assertEqual(visible, {alive.pk, unlinked.pk})
+        self.assertTrue(User.objects.filter(pk=deleted.pk).exists())
+
+    def test_delete_action_removes_central_identity_and_keeps_history_profile(self):
+        from rest_framework.test import APIClient
+        User = get_user_model()
+        admin = User.objects.create_user(username='admin', email='admin@example.invalid', is_active=True)
+        target = User.objects.create_user(username='target', email='target@example.invalid', is_active=True)
+        from django.contrib.auth.models import Group, Permission
+        role, _ = Group.objects.get_or_create(name='Admin')
+        role.permissions.set(Permission.objects.all())
+        admin.groups.add(role)
+        User.objects.filter(pk=admin.pk).update(keycloak_sub='admin-sub', keycloak_issuer=life.issuer())
+        User.objects.filter(pk=target.pk).update(keycloak_sub='target-sub', keycloak_issuer=life.issuer())
+        self.admin.request.return_value = [{'id':'admin-sub'}, {'id':'target-sub'}]
+        client = APIClient()
+        client.force_authenticate(admin)
+        response = client.delete('/api/users/' + str(target.pk) + '/')
+        self.assertEqual(response.status_code,204,getattr(response,'data',None))
+        self.assertTrue(User.objects.filter(pk=target.pk).exists())
+        target.refresh_from_db()
+        self.assertFalse(target.is_active)
+        self.assertTrue(any(call.args[:2] == ('DELETE','/admin/realms/app/users/target-sub') for call in self.admin.request.call_args_list))
